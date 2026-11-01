@@ -21,6 +21,7 @@ function fakeAdapter(overrides = {}) {
     async acquireLock() { calls.push('lock'); return async () => calls.push('unlock') },
     async hasAttempted() { return false },
     async recordAttempt() { calls.push('attempt') },
+    async clearAttempt() { calls.push('clear') },
     async findInstalled() { calls.push('find'); return '/tmp/OrcaIsland.app' },
     async install() { calls.push('install'); return '/tmp/OrcaIsland.app' },
     async launch(app) { calls.push(`launch:${app}`) },
@@ -34,7 +35,7 @@ test('automatic activation launches an installed companion without blocking', as
   const manager = createCompanionManager({ platform: 'darwin', adapter })
   const result = await manager.ensure()
   assert.equal(result.status, 'running')
-  assert.deepEqual(adapter.calls, ['lock', 'find', 'launch:/tmp/OrcaIsland.app', 'wait', 'unlock'])
+  assert.deepEqual(adapter.calls, ['lock', 'find', 'launch:/tmp/OrcaIsland.app', 'wait', 'clear', 'unlock'])
 })
 
 test('installs when no companion is present and reports a release failure once', async () => {
