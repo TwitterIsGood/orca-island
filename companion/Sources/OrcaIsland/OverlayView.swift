@@ -46,11 +46,13 @@ struct OverlayView: View {
                         }
                     }
                 }
+                .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
             }
         }
         .frame(width: store.expanded ? geometry.expandedWidth : geometry.collapsedWidth)
         .background(Color.black)
         .clipShape(NotchSilhouette(bottomRadius: store.expanded ? 20 : 13))
+        .shadow(color: .black.opacity(store.expanded ? 0.38 : 0), radius: 12, y: 5)
         .background(alignment: .top) {
             if !store.expanded {
                 // Measure the next layout without giving the closed window a large hit region.
@@ -60,6 +62,7 @@ struct OverlayView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .ignoresSafeArea()
         .preferredColorScheme(.dark)
+        .animation(.spring(response: 0.42, dampingFraction: 0.82), value: store.expanded)
         .onPreferenceChange(IslandBodyHeight.self) { height in
             let rounded = ceil(height)
             if rounded > 0 && abs(rounded - store.measuredBodyHeight) > 0.5 {

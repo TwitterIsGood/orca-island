@@ -1,0 +1,118 @@
+name: Release macOS app
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish a GitHub Release using the version in orca-plugin.json
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      notarized: ${{ steps.notarization.outputs.enabled }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate release version
+        id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          VERSION="$(plutil -extract version raw -o - orca-plugin.json)"
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Expected stable x.y.z manifest version"; exit 1; }
+          if [[ "$EVENT_NAME" == push && "$REF_NAME" != "v$VERSION" ]]; then echo "Tag $REF_NAME does not match manifest version v$VERSION"; exit 1; fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Run checks
+        run: |
+          bash -n scripts/*.sh tests/*.sh
+          node --test tests/*.test.mjs
+          ./tests/check-native.sh
+          ./tests/check-completions.sh
+      - name: Configure optional Developer ID signing
+        env:
+          CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: |
+          if [[ -z "$CERTIFICATE_P12$CERTIFICATE_PASSWORD$SIGNING_IDENTITY" ]]; then echo "No Developer ID configured; building with an ad-hoc signature."; exit 0; fi
+          [[ -n "$CERTIFICATE_P12" && -n "$CERTIFICATE_PASSWORD" && -n "$SIGNING_IDENTITY" ]] || { echo "Set all three MACOS_CERTIFICATE_P12, MACOS_CERTIFICATE_PASSWORD, MACOS_SIGNING_IDENTITY secrets."; exit 1; }
+          CERTIFICATE_PATH="$RUNNER_TEMP/orca-island-signing.p12"; KEYCHAIN_PATH="$RUNNER_TEMP/orca-island-signing.keychain-db"; KEYCHAIN_PASSWORD="$(openssl rand -hex 32)"; echo "::add-mask::$KEYCHAIN_PASSWORD"
+          printf '%s' "$CERTIFICATE_P12" | base64 --decode > "$CERTIFICATE_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"; security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"; security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -P "$CERTIFICATE_PASSWORD" -k "$KEYCHAIN_PATH" -T /usr/bin/codesign >/dev/null; security set-key-partition-list -S apple-tool:,apple:,codesign: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" >/dev/null; security list-keychains -d user -s "$KEYCHAIN_PATH" "$HOME/Library/Keychains/login.keychain-db"; security default-keychain -d user -s "$KEYCHAIN_PATH"
+          echo "ORCA_SIGNING_IDENTITY=$SIGNING_IDENTITY" >> "$GITHUB_ENV"
+      - name: Configure optional notarization
+        id: notarization
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          echo "enabled=false" >> "$GITHUB_OUTPUT"
+          if [[ -z "$APPLE_ID$APPLE_TEAM_ID$APPLE_APP_SPECIFIC_PASSWORD" ]]; then exit 0; fi
+          [[ -n "${ORCA_SIGNING_IDENTITY:-}" && -n "$APPLE_ID" && -n "$APPLE_TEAM_ID" && -n "$APPLE_APP_SPECIFIC_PASSWORD" ]] || { echo "Notarization requires Developer ID signing plus all three APPLE_* secrets."; exit 1; }
+          xcrun notarytool store-credentials orca-island-notary --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD"
+          echo "ORCA_NOTARY_PROFILE=orca-island-notary" >> "$GITHUB_ENV"; echo "enabled=true" >> "$GITHUB_OUTPUT"
+      - name: Build and package Universal app
+        env:
+          ORCA_BUILD_NUMBER: ${{ github.run_number }}
+        run: ./scripts/package-release.sh
+      - name: Upload app packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: OrcaIsland-macos-universal
+          path: |
+            dist/OrcaIsland-macos-universal.zip
+            dist/OrcaIsland-macos-universal.dmg
+            dist/SHA256SUMS
+          if-no-files-found: error
+      - name: Remove temporary signing material
+        if: always()
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/orca-island-signing.keychain-db"
+          if [[ -f "$KEYCHAIN_PATH" ]]; then security delete-keychain "$KEYCHAIN_PATH"; fi
+          if [[ -f "$RUNNER_TEMP/orca-island-signing.p12" ]]; then rm "$RUNNER_TEMP/orca-island-signing.p12"; fi
+  publish:
+    needs: build
+    if: github.event_name == 'push' || inputs.publish_release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: OrcaIsland-macos-universal
+          path: dist
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.build.outputs.version }}
+          NOTARIZED: ${{ needs.build.outputs.notarized }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          cd dist
+          sha256sum -c SHA256SUMS
+          NOTES="$RUNNER_TEMP/orca-island-release.md"
+          cat > "$NOTES" <<'NOTES'
+          Orca Island for macOS 13+, with native Apple silicon and Intel support.
+
+          Install the Orca plugin from this repository to download and start the companion automatically, or download the DMG and drag OrcaIsland.app to Applications.
+
+          The ZIP contains OrcaIsland.app at its root. SHA256SUMS verifies both downloads.
+          NOTES
+          if [[ "$NOTARIZED" != true ]]; then printf '\nThis build is ad-hoc signed and is not notarized by Apple.\n' >> "$NOTES"; fi
+          if gh release view "v$VERSION" >/dev/null 2>&1; then gh release upload "v$VERSION" OrcaIsland-macos-universal.zip OrcaIsland-macos-universal.dmg SHA256SUMS --clobber; else gh release create "v$VERSION" --target "$TARGET_SHA" --title "Orca Island v$VERSION" --notes-file "$NOTES" OrcaIsland-macos-universal.zip OrcaIsland-macos-universal.dmg SHA256SUMS; fi

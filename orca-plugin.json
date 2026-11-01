@@ -5,8 +5,8 @@
   "publisher": "twitterisgood",
   "id": "island-bridge",
   "name": "Orca Island",
-  "version": "0.1.0",
-  "description": "Sends Orca agent status changes to the local Orca Island companion.",
+  "version": "0.2.0",
+  "description": "Shows Orca agent status in a native macOS Dynamic Island companion.",
   "author": { "name": "TwitterIsGood", "url": "https://github.com/TwitterIsGood" },
   "repository": "https://github.com/TwitterIsGood/orca-island",
   "license": "MIT",
@@ -15,7 +15,9 @@
   "main": "main.mjs",
   "contributes": {
     "commands": [
-      { "id": "orca-island.send-test", "title": "Orca Island: Send test event" }
+      { "id": "orca-island.send-test", "title": "Orca Island: Send test event" },
+      { "id": "orca-island.install-start", "title": "Orca Island: Install & Start" },
+      { "id": "orca-island.open", "title": "Orca Island: Open" }
     ],
     "events": [{ "on": "agent.status.changed" }]
   },

@@ -102,7 +102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func resizePanel(animated: Bool = true) {
         guard let panel else { return }
         let frame = store.notchGeometry.panelFrame(expanded: store.expanded, bodyHeight: store.measuredBodyHeight)
-        panel.hasShadow = store.expanded
+        panel.hasShadow = false
         panel.setFrame(frame, display: true, animate: animated)
         panel.orderFrontRegardless()
     }

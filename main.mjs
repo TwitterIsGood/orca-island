@@ -1,3 +1,5 @@
+import { createCompanionManager } from './lib/companion-manager.mjs'
+
 const DEFAULT_ENDPOINT = 'http://127.0.0.1:17777/events'
 const MAX_PENDING = 20
 const REQUEST_TIMEOUT_MS = 1000
@@ -96,7 +98,7 @@ export function createRelay({
   }
 }
 
-export default function activate(orca) {
+export default function activate(orca, { companionManager = createCompanionManager({ log: (line) => orca.log(line) }) } = {}) {
   const relay = createRelay({ log: (line) => orca.log(line) })
 
   // Orca kills workers that keep too many events unacknowledged. Queue delivery
@@ -106,4 +108,10 @@ export default function activate(orca) {
   })
 
   orca.commands.register('orca-island.send-test', () => relay.sendTest())
+
+  // Startup is deliberately fire-and-forget: plugin activation must remain
+  // responsive while the companion is checked or installed in the background.
+  void companionManager.ensure()
+  orca.commands.register('orca-island.install-start', () => companionManager.ensure({ retry: true }))
+  orca.commands.register('orca-island.open', () => companionManager.ensure({ retry: true }))
 }
