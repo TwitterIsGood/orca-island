@@ -27,8 +27,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("Orca Island HTTP server failed: \(error.localizedDescription)")
         }
 
-        poller = OrcaStatusPoller { [weak self] events in
-            self?.store.replaceFromPoll(events)
+        poller = OrcaStatusPoller { [weak self] snapshot in
+            guard let snapshot else {
+                self?.store.markSyncUnavailable()
+                return
+            }
+            self?.store.replaceFromPoll(snapshot.events, snapshotStartedAt: snapshot.startedAt,
+                                       livePaneKeys: snapshot.livePaneKeys)
         }
         poller?.start()
 

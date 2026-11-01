@@ -26,5 +26,6 @@ jobs:
         run: |
           ./tests/check-native.sh
           ./tests/check-completions.sh
+          ./tests/check-sync.sh
       - name: Build companion for this runner
         run: ./scripts/build-companion.sh --arch native

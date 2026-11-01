@@ -1,11 +1,17 @@
 import Foundation
 
+struct OrcaPollSnapshot {
+    let events: [IslandEvent]
+    let livePaneKeys: Set<String>
+    let startedAt: Date
+}
+
 final class OrcaStatusPoller {
     private let queue = DispatchQueue(label: "com.orca-island.poller")
-    private let onEvents: ([IslandEvent]) -> Void
+    private let onEvents: (OrcaPollSnapshot?) -> Void
     private var timer: DispatchSourceTimer?
 
-    init(onEvents: @escaping ([IslandEvent]) -> Void) {
+    init(onEvents: @escaping (OrcaPollSnapshot?) -> Void) {
         self.onEvents = onEvents
     }
 
@@ -24,15 +30,20 @@ final class OrcaStatusPoller {
     }
 
     private func poll() {
+        let startedAt = Date()
         guard let terminalData = OrcaCommandRunner.run(["terminal", "list", "--json"]),
               let terminalObject = try? JSONSerialization.jsonObject(with: terminalData) as? [String: Any],
+              terminalObject["ok"] as? Bool == true,
               let result = terminalObject["result"] as? [String: Any],
               let terminals = result["terminals"] as? [[String: Any]] else {
+            publish(nil)
             return
         }
 
         var terminalByPane: [String: [String: Any]] = [:]
         for terminal in terminals {
+            guard terminal["orphaned"] as? Bool != true,
+                  terminal["connected"] as? Bool != false else { continue }
             guard let tabId = terminal["tabId"] as? String,
                   let leafId = terminal["leafId"] as? String else { continue }
             terminalByPane["\(tabId):\(leafId)"] = terminal
@@ -42,6 +53,7 @@ final class OrcaStatusPoller {
         guard let statusData = try? Data(contentsOf: statusURL),
               let statusObject = try? JSONSerialization.jsonObject(with: statusData) as? [String: Any],
               let entries = statusObject["entries"] as? [String: [String: Any]] else {
+            publish(nil)
             return
         }
 
@@ -77,9 +89,10 @@ final class OrcaStatusPoller {
             )
         }
 
-        DispatchQueue.main.async { [onEvents] in
-            onEvents(events)
-        }
+        publish(OrcaPollSnapshot(events: events, livePaneKeys: Set(terminalByPane.keys), startedAt: startedAt))
     }
 
+    private func publish(_ snapshot: OrcaPollSnapshot?) {
+        DispatchQueue.main.async { [onEvents] in onEvents(snapshot) }
+    }
 }

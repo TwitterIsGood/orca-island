@@ -90,6 +90,9 @@ final class IslandStore: ObservableObject {
     @Published var expanded = false
     @Published var notchGeometry = NotchGeometry.fallback
     @Published var measuredBodyHeight: CGFloat = 44
+    @Published private(set) var syncUnavailable = false
+    @Published private(set) var lastSyncedAt: Date?
+    private var eventArrivalByID: [String: Date] = [:]
 
     var visibleBodyHeight: CGFloat {
         min(max(44, measuredBodyHeight), notchGeometry.maximumBodyHeight)
@@ -118,14 +121,18 @@ final class IslandStore: ObservableObject {
         sortedSessions.first
     }
 
-    func ingest(_ event: IslandEvent) {
+    func ingest(_ event: IslandEvent, arrivedAt: Date = Date()) {
         let previous = previousSession(for: event, in: sessions)
         let session = makeSession(from: event, previous: previous)
         sessions[session.id] = session
+        if previous == nil || session.receivedAt > previous!.receivedAt {
+            eventArrivalByID[session.id] = arrivedAt
+        }
         acknowledgeUpdates(completions: isNewCompletion(session, after: previous) ? [session] : [])
     }
 
-    func replaceFromPoll(_ events: [IslandEvent]) {
+    func replaceFromPoll(_ events: [IslandEvent], snapshotStartedAt: Date? = nil,
+                         livePaneKeys: Set<String>? = nil) {
         var snapshot: [String: AgentSession] = [:]
         for event in events {
             let previous = previousSession(for: event, in: snapshot)
@@ -134,11 +141,28 @@ final class IslandStore: ObservableObject {
             snapshot[session.id] = session
         }
 
+        // A missing hook is not a closed terminal. A snapshot also cannot delete
+        // an event received after its terminal inventory was requested.
+        for (id, previous) in sessions where snapshot[id] == nil {
+            let stillLive = previous.paneKey.map { livePaneKeys?.contains($0) == true } ?? false
+            let arrivedDuringPoll = snapshotStartedAt.map { start in
+                eventArrivalByID[id].map { $0 > start } ?? false
+            } ?? false
+            if stillLive || arrivedDuringPoll { snapshot[id] = previous }
+        }
+
         // Compare the final snapshot, not intermediate duplicate records. Loading
         // historical working/done entries must not manufacture a new completion.
         let completions = snapshot.values.filter { isNewCompletion($0, after: sessions[$0.id]) }
         sessions = snapshot
+        eventArrivalByID = eventArrivalByID.filter { snapshot[$0.key] != nil }
+        lastSyncedAt = Date()
+        syncUnavailable = false
         acknowledgeUpdates(completions: completions)
+    }
+
+    func markSyncUnavailable() {
+        syncUnavailable = true
     }
 
     private func previousSession(for event: IslandEvent, in candidates: [String: AgentSession]) -> AgentSession? {

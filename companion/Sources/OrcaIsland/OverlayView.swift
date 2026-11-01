@@ -17,6 +17,7 @@ struct OverlayView: View {
         store.sessions.values.filter { $0.state == "waiting" || $0.state == "blocked" }.count
     }
     private var statusColor: Color {
+        if store.syncUnavailable { return .orange }
         if attentionCount > 0 { return .orange }
         return workingCount > 0 ? .cyan : (store.sessions.isEmpty ? .gray : .green)
     }
@@ -85,7 +86,8 @@ struct OverlayView: View {
                 .accessibilityHidden(true)
 
             HStack(spacing: 6) {
-                Image(systemName: attentionCount > 0 ? "exclamationmark.circle.fill" :
+                Image(systemName: store.syncUnavailable ? "wifi.exclamationmark" :
+                      attentionCount > 0 ? "exclamationmark.circle.fill" :
                       workingCount > 0 ? "circle.dotted" : "checkmark.circle")
                     .foregroundStyle(statusColor)
                 Text("\(store.sessions.count)")
@@ -106,6 +108,11 @@ struct OverlayView: View {
 
     private var measuredContent: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if store.syncUnavailable {
+                Text("同步中断 · 以下为上次状态")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.orange)
+            }
             Text("\(store.workspaceGroups.count) 个工作区 · \(store.sessions.count) 个对话")
                 .font(.system(size: 10))
                 .foregroundStyle(.white.opacity(0.45))

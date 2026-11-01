@@ -41,6 +41,7 @@ jobs:
           node --test tests/*.test.mjs
           ./tests/check-native.sh
           ./tests/check-completions.sh
+          ./tests/check-sync.sh
       - name: Configure optional Developer ID signing
         env:
           CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
