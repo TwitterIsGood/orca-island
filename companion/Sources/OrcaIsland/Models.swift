@@ -87,6 +87,12 @@ struct WorkspaceGroup: Identifiable {
 final class IslandStore: ObservableObject {
     @Published private(set) var sessions: [String: AgentSession] = [:]
     @Published var expanded = false
+    @Published var notchGeometry = NotchGeometry.fallback
+    @Published var measuredBodyHeight: CGFloat = 44
+
+    var visibleBodyHeight: CGFloat {
+        min(max(44, measuredBodyHeight), notchGeometry.maximumBodyHeight)
+    }
 
     var sortedSessions: [AgentSession] {
         sessions.values.sorted {

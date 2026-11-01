@@ -32,8 +32,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         poller?.start()
 
         store.$expanded
+            .removeDuplicates()
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.resizePanel() }
+            .store(in: &cancellables)
+
+        store.$measuredBodyHeight
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard self?.store.expanded == true else { return }
+                self?.resizePanel()
+            }
             .store(in: &cancellables)
 
         NotificationCenter.default.addObserver(
@@ -50,28 +60,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func repositionPanel() {
+        updateScreenGeometry()
         resizePanel(animated: false)
     }
 
+    private func updateScreenGeometry() {
+        guard let screen = NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 })
+            ?? NSScreen.main ?? NSScreen.screens.first else { return }
+        store.notchGeometry = NotchGeometry(screen: screen)
+    }
+
     private func createPanel() {
-        let panel = NSPanel(
-            contentRect: .zero,
+        updateScreenGeometry()
+        let panel = NotchPanel(
+            contentRect: store.notchGeometry.panelFrame(expanded: false, bodyHeight: 0),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = true
-        panel.level = .statusBar
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        panel.hasShadow = false
+        panel.level = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue + 3)
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+        panel.isMovable = false
         panel.hidesOnDeactivate = false
         panel.isFloatingPanel = true
         panel.becomesKeyOnlyIfNeeded = true
         panel.titleVisibility = .hidden
         panel.title = "Orca Island"
         panel.titlebarAppearsTransparent = true
-        panel.contentView = NSHostingView(rootView: OverlayView(store: store))
+        let hosting = NSHostingView(rootView: OverlayView(store: store))
+        hosting.sizingOptions = []
+        panel.contentView = hosting
         self.panel = panel
         resizePanel(animated: false)
         panel.orderFrontRegardless()
@@ -79,13 +100,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func resizePanel(animated: Bool = true) {
         guard let panel else { return }
-        let size = store.expanded ? NSSize(width: 440, height: 340) : NSSize(width: 340, height: 46)
-        let screen = NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 })
-            ?? NSScreen.main
-            ?? NSScreen.screens[0]
-        let x = screen.frame.midX - size.width / 2
-        let y = screen.frame.maxY - size.height - 8
-        panel.setFrame(NSRect(x: x, y: y, width: size.width, height: size.height), display: true, animate: animated)
+        let frame = store.notchGeometry.panelFrame(expanded: store.expanded, bodyHeight: store.measuredBodyHeight)
+        panel.hasShadow = store.expanded
+        panel.setFrame(frame, display: true, animate: animated)
         panel.orderFrontRegardless()
     }
 }
