@@ -1,0 +1,21 @@
+{
+  "$schema": "https://raw.githubusercontent.com/stablyai/orca/main/docs/schemas/plugins/orca-plugin.v2.schema.json",
+  "manifestVersion": 2,
+  "execution": "trusted-worker",
+  "publisher": "twitterisgood",
+  "id": "orca-island-bridge",
+  "name": "Orca Island Bridge",
+  "version": "0.1.0",
+  "description": "Sends Orca agent status changes to the local Orca Island companion.",
+  "author": { "name": "Orca Island" },
+  "engines": { "orca": ">=1.4.245" },
+  "pluginApi": 1,
+  "main": "main.mjs",
+  "contributes": {
+    "commands": [
+      { "id": "orca-island.send-test", "title": "Orca Island: Send test event" }
+    ],
+    "events": [{ "on": "agent.status.changed" }]
+  },
+  "capabilities": [{ "kind": "agent:read" }]
+}
