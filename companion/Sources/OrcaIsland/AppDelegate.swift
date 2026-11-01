@@ -5,7 +5,7 @@ import SwiftUI
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let store = IslandStore()
-    private var panel: NSPanel?
+    private var panel: NotchPanel?
     private var server: LocalHTTPServer?
     private var poller: OrcaStatusPoller?
     private var cancellables = Set<AnyCancellable>()
@@ -18,7 +18,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             server = try LocalHTTPServer(port: 17777, statusHandler: { [weak self] complete in
                 DispatchQueue.main.async {
-                    let data = try? JSONSerialization.data(withJSONObject: self?.store.synchronizationDiagnostics ?? [:])
+                    var diagnostics = self?.store.synchronizationDiagnostics ?? [:]
+                    diagnostics["expanded"] = self?.store.expanded ?? false
+                    diagnostics["headerClickCount"] = self?.panel?.headerClickCount ?? 0
+                    diagnostics["pointerDownCount"] = self?.panel?.pointerDownCount ?? 0
+                    diagnostics["ignoresMouseEvents"] = self?.panel?.ignoresMouseEvents ?? false
+                    let data = try? JSONSerialization.data(withJSONObject: diagnostics)
                     complete(data ?? Data("{}".utf8))
                 }
             }, eventHandler: { [weak self] body, complete in
@@ -122,6 +127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
+        panel.ignoresMouseEvents = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         panel.isMovable = false
         panel.hidesOnDeactivate = false
@@ -132,6 +138,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.titleVisibility = .hidden
         panel.title = "Orca Island"
         panel.titlebarAppearsTransparent = true
+        panel.onHeaderClick = { [weak self] in
+            // Finish the mouse-up dispatch before changing the window's geometry.
+            DispatchQueue.main.async { self?.store.expanded.toggle() }
+        }
         let hosting = NotchHostingView(rootView: OverlayView(store: store))
         hosting.sizingOptions = []
         panel.contentView = hosting
@@ -142,6 +152,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func resizePanel(expanded: Bool, animated: Bool = true) {
         guard let panel else { return }
+        panel.headerHeight = store.notchGeometry.topBarHeight
         resizeGeneration += 1
         let generation = resizeGeneration
         let frame = store.notchGeometry.panelFrame(expanded: expanded, bodyHeight: store.measuredBodyHeight)
@@ -151,10 +162,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.65) { [weak self] in
                 guard let self, self.resizeGeneration == generation else { return }
                 self.panel?.setFrame(frame, display: true, animate: false)
+                self.panel?.orderFrontRegardless()
             }
         } else {
             // Enlarge before @Published updates SwiftUI; the outer canvas never animates.
             panel.setFrame(frame, display: true, animate: false)
+            panel.orderFrontRegardless()
         }
     }
 }

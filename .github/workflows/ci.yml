@@ -25,6 +25,7 @@ jobs:
       - name: Test native layout and completion behavior
         run: |
           ./tests/check-native.sh
+          ./tests/check-input.sh
           ./tests/check-completions.sh
           ./tests/check-sync.sh
           ./tests/check-event-sync.sh

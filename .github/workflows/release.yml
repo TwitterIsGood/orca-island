@@ -40,6 +40,7 @@ jobs:
           bash -n scripts/*.sh tests/*.sh
           node --test tests/*.test.mjs
           ./tests/check-native.sh
+          ./tests/check-input.sh
           ./tests/check-completions.sh
           ./tests/check-sync.sh
           ./tests/check-event-sync.sh
