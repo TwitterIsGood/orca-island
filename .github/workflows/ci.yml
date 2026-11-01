@@ -27,5 +27,8 @@ jobs:
           ./tests/check-native.sh
           ./tests/check-completions.sh
           ./tests/check-sync.sh
+          ./tests/check-event-sync.sh
+          ./tests/check-bridge.sh
+          ./tests/check-http.sh
       - name: Build companion for this runner
         run: ./scripts/build-companion.sh --arch native

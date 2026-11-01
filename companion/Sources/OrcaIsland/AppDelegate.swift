@@ -16,25 +16,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         createPanel()
 
         do {
-            server = try LocalHTTPServer(port: 17777) { [weak self] body in
+            server = try LocalHTTPServer(port: 17777, statusHandler: { [weak self] complete in
                 DispatchQueue.main.async {
-                    guard let event = try? JSONDecoder().decode(IslandEvent.self, from: body) else { return }
-                    self?.store.ingest(event)
+                    let data = try? JSONSerialization.data(withJSONObject: self?.store.synchronizationDiagnostics ?? [:])
+                    complete(data ?? Data("{}".utf8))
                 }
-            }
+            }, eventHandler: { [weak self] body, complete in
+                DispatchQueue.main.async {
+                    guard let self, let message = BridgeMessage.decode(body) else { complete(false); return }
+                    self.accept(message)
+                    complete(true)
+                }
+            })
             server?.start()
         } catch {
             NSLog("Orca Island HTTP server failed: \(error.localizedDescription)")
         }
 
-        poller = OrcaStatusPoller { [weak self] snapshot in
+        poller = OrcaStatusPoller(onEvents: { [weak self] snapshot in
             guard let snapshot else {
                 self?.store.markSyncUnavailable()
                 return
             }
             self?.store.replaceFromPoll(snapshot.events, snapshotStartedAt: snapshot.startedAt,
                                        livePaneKeys: snapshot.livePaneKeys)
-        }
+            self?.store.recordPollCount(snapshot.pollCount)
+        })
         poller?.start()
 
         store.$expanded
@@ -57,11 +64,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             name: NSApplication.didChangeScreenParametersNotification,
             object: nil
         )
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(resumeSynchronization), name: NSWorkspace.didWakeNotification, object: nil
+        )
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         server?.stop()
         poller?.stop()
+    }
+
+    @objc private func resumeSynchronization() {
+        poller?.requestRefresh(immediate: true)
+    }
+
+    private func accept(_ message: BridgeMessage) {
+        switch message {
+        case .hello:
+            let reconnecting = store.usingEventBridge
+            store.recordBridgeMessage()
+            poller?.confirmBridge()
+            if reconnecting { poller?.requestRefresh(immediate: true) }
+        case .status(let event):
+            let needsMetadata = !store.sessions.values.contains { $0.paneKey == event.paneKey && $0.terminalTitle != nil }
+            store.ingest(event)
+            store.recordBridgeMessage(isStatus: true)
+            poller?.confirmBridge()
+            if needsMetadata { poller?.requestRefresh() }
+        case .workspace:
+            store.recordBridgeMessage()
+            poller?.confirmBridge()
+            poller?.requestRefresh()
+        case .test:
+            break
+        }
     }
 
     @objc private func repositionPanel() {

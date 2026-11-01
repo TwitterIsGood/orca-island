@@ -19,10 +19,10 @@
    open dist/OrcaIsland.app
    ```
 
-2. 点击刘海左侧 **Orca** 或右侧**数字**展开/收起，列表较长时可滚动。任务从进行中变为完成时会自动展开并标出对应对话，直到手动收起；启动时已有的完成任务不会弹出。应用每 2 秒读取本机 Orca 的终端状态；断连时显示同步中断。
+2. 点击刘海左侧 **Orca** 或右侧**数字**展开/收起，列表较长时可滚动。任务从进行中变为完成时会自动展开并标出对应对话，直到手动收起；启动时已有的完成任务不会弹出。接通插件后，状态事件即时推送，每 45 秒校准一次；未接通时使用 2 秒兼容轮询，断连会明确提示。
 3. 启用实时更新：Orca → Settings → Plugins → 打开插件系统 → 从 Git URL 安装 `https://github.com/TwitterIsGood/orca-island` → Review & Enable **Orca Island**。
 
-启用插件后，它会在后台检查并启动 Orca Island。首次安装伴侣时从 GitHub Release 下载并校验 `SHA256SUMS`；也可以从命令面板运行 **Orca Island: Install & Start** 手动重试。插件只在 macOS 上安装伴侣，下载和启动不会阻塞 Orca。
+插件收到首次事件或运行命令时，会在后台检查并启动 Orca Island。首次安装伴侣时从 GitHub Release 下载并校验 `SHA256SUMS`；也可以从命令面板运行 **Orca Island: Install & Start** 手动重试。插件只在 macOS 上安装伴侣，下载和启动不会阻塞 Orca。
 
 这是 Orca 插件 + macOS 原生伴侣。仅显示状态和跳转会话，暂不支持在灵动岛内审批工具。
 

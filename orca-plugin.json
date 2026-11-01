@@ -19,7 +19,11 @@
       { "id": "orca-island.install-start", "title": "Orca Island: Install & Start" },
       { "id": "orca-island.open", "title": "Orca Island: Open" }
     ],
-    "events": [{ "on": "agent.status.changed" }]
+    "events": [
+      { "on": "agent.status.changed" },
+      { "on": "workspace.created" },
+      { "on": "workspace.removed" }
+    ]
   },
-  "capabilities": [{ "kind": "agent:read" }]
+  "capabilities": [{ "kind": "agent:read" }, { "kind": "workspace:read" }]
 }

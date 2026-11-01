@@ -15,6 +15,7 @@ struct IslandEvent: Codable {
     let mainAgent: MainAgentPayload?
     let receivedAt: Double?
     var terminalTitle: String? = nil
+    var terminalId: String? = nil
 }
 
 struct AgentSession: Identifiable {
@@ -92,6 +93,10 @@ final class IslandStore: ObservableObject {
     @Published var measuredBodyHeight: CGFloat = 44
     @Published private(set) var syncUnavailable = false
     @Published private(set) var lastSyncedAt: Date?
+    @Published private(set) var usingEventBridge = false
+    private(set) var lastBridgeAt: Date?
+    private(set) var pushedStatusCount = 0
+    private(set) var pollCount = 0
     private var eventArrivalByID: [String: Date] = [:]
 
     var visibleBodyHeight: CGFloat {
@@ -163,6 +168,25 @@ final class IslandStore: ObservableObject {
 
     func markSyncUnavailable() {
         syncUnavailable = true
+    }
+
+    func recordBridgeMessage(isStatus: Bool = false) {
+        usingEventBridge = true
+        lastBridgeAt = Date()
+        if isStatus { pushedStatusCount += 1 }
+    }
+
+    func recordPollCount(_ count: Int) {
+        pollCount = count
+    }
+
+    var synchronizationDiagnostics: [String: Any] {
+        ["mode": usingEventBridge ? "event" : "compatibility",
+         "reconciliationSeconds": usingEventBridge ? 45 : 2,
+         "pollCount": pollCount, "pushedStatusCount": pushedStatusCount,
+         "sessionCount": sessions.count, "syncUnavailable": syncUnavailable,
+         "lastBridgeAt": lastBridgeAt.map { $0.timeIntervalSince1970 * 1000 } as Any? ?? NSNull(),
+         "lastReconciledAt": lastSyncedAt.map { $0.timeIntervalSince1970 * 1000 } as Any? ?? NSNull()]
     }
 
     private func previousSession(for event: IslandEvent, in candidates: [String: AgentSession]) -> AgentSession? {

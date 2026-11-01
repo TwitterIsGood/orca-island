@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createRelay } from '../main.mjs'
+import activate, { createRelay } from '../main.mjs'
 
 function deferred() {
   let resolve
@@ -32,6 +32,8 @@ test('deduplicates repeated agent states and forwards the normalized event', asy
       type: 'orca.agent.status',
       workspaceId: 'workspace-1',
       paneKey: 'tab-1:leaf-1',
+      terminalTitle: null,
+      terminalId: null,
       state: 'working',
       combinedState: 'working',
       mainAgent: { state: 'done', stateStartedAt: 120 },
@@ -45,6 +47,7 @@ test('keeps delivery failures inside the worker and drains later events', async 
   const logs = []
   let attempts = 0
   const relay = createRelay({
+    retryDelays: [],
     post: async (payload) => {
       attempts += 1
       if (attempts === 1) throw new Error('companion offline')
@@ -66,6 +69,7 @@ test('retries the same state on a later hook after a failed delivery', async () 
   let attempts = 0
   const sent = []
   const relay = createRelay({
+    retryDelays: [],
     // Deliberately throw synchronously as well as testing the network-style
     // rejected promise above; neither failure may strand the drain promise.
     post(payload) {
@@ -77,7 +81,7 @@ test('retries the same state on a later hook after a failed delivery', async () 
 
   relay.handle(event('working', 10))
   await relay.idle()
-  assert.equal(attempts, 1, 'A failure must not start automatic retries')
+  assert.equal(attempts, 1, 'Configured retries are exhausted before accepting a later hook')
   assert.equal(relay.handle(event('working', 20)), 'queued')
   await relay.idle()
   assert.equal(attempts, 2)
@@ -87,6 +91,7 @@ test('retries the same state on a later hook after a failed delivery', async () 
 test('does not trust an older success after an uncertain failed response', async () => {
   const sent = []
   const relay = createRelay({
+    retryDelays: [],
     async post(payload) {
       sent.push(payload.state)
       if (payload.state === 'done') throw new Error('response lost after receipt')
@@ -292,4 +297,163 @@ test('bounds successful-state memory and retains recently used panes', async () 
   assert.equal(relay.handle(event('working', 50, 'b')), 'queued', 'The evicted pane may be delivered again')
   await relay.idle()
   assert.deepEqual(sent, ['a', 'b', 'c', 'b'])
+})
+
+test('retries an early event while the companion starts without reordering later states', async () => {
+  const retry = deferred()
+  const attempts = []
+  const waits = []
+  let ready = false
+  const relay = createRelay({
+    async sleep(ms) {
+      waits.push(ms)
+      await retry.promise
+    },
+    async post(payload) {
+      attempts.push([payload.state, payload.receivedAt])
+      if (!ready) throw new Error('companion starting')
+    }
+  })
+  relay.handle(event('working', 10))
+  await new Promise(setImmediate)
+  relay.handle(event('done', 20))
+  ready = true
+  retry.resolve()
+  await relay.idle()
+  assert.deepEqual(waits, [200])
+  assert.deepEqual(attempts, [['working', 10], ['working', 10], ['done', 20]])
+})
+
+test('caps automatic delivery at three attempts and permits the next real hook', async () => {
+  let attempts = 0
+  const waits = []
+  const logs = []
+  const relay = createRelay({
+    sleep: async (ms) => waits.push(ms),
+    log: (line) => logs.push(line),
+    post() {
+      attempts += 1
+      throw new Error('companion offline')
+    }
+  })
+  relay.handle(event('working', 10))
+  await relay.idle()
+  assert.equal(attempts, 3)
+  assert.deepEqual(waits, [200, 600])
+  assert.equal(logs.length, 1)
+  assert.match(logs[0], /companion offline/)
+  await new Promise(setImmediate)
+  assert.equal(attempts, 3, 'No background retry loop remains after exhaustion')
+  assert.equal(relay.handle(event('working', 20)), 'queued')
+  await relay.idle()
+  assert.equal(attempts, 6)
+})
+
+test('does not suppress title and terminal identity updates when status is unchanged', async () => {
+  const sent = []
+  const relay = createRelay({ post: async (payload) => sent.push(payload) })
+  relay.handle({ ...event('working', 10), title: 'First task', terminalId: 'first' })
+  await relay.idle()
+  assert.equal(relay.handle({ ...event('working', 20), title: 'Renamed task', terminalId: 'first' }), 'queued')
+  await relay.idle()
+  assert.equal(relay.handle({ ...event('working', 30), title: 'Renamed task', terminalId: 'second' }), 'queued')
+  await relay.idle()
+  assert.deepEqual(sent.map(({ terminalTitle, terminalId }) => [terminalTitle, terminalId]), [
+    ['First task', 'first'], ['Renamed task', 'first'], ['Renamed task', 'second']
+  ])
+})
+
+test('periodically forwards an unchanged real hook so native restarts can discover the bridge', async () => {
+  let clock = 1000
+  const sent = []
+  const relay = createRelay({ now: () => clock, post: async (payload) => sent.push(payload) })
+  relay.handle(event('working', clock))
+  await relay.idle()
+  clock = 20_000
+  assert.equal(relay.handle(event('working', clock)), 'duplicate')
+  clock = 31_000
+  assert.equal(relay.handle(event('working', clock)), 'queued')
+  await relay.idle()
+  assert.equal(sent.length, 2)
+})
+
+test('sends a protocol handshake and retains workspace lifecycle order', async () => {
+  const sent = []
+  const relay = createRelay({ now: () => 10, post: async (payload) => sent.push(payload) })
+  relay.hello({ major: 1, minor: 2 })
+  relay.workspaceChanged('created', { workspaceId: 'workspace-1', receivedAt: 20 })
+  relay.workspaceChanged('removed', { workspaceId: 'workspace-1', receivedAt: 30 })
+  assert.equal(relay.workspaceChanged('created', {}), 'ignored')
+  assert.equal(relay.workspaceChanged('changed', { workspaceId: 'workspace-1' }), 'ignored')
+  await relay.idle()
+  assert.deepEqual(sent, [
+    { type: 'orca.bridge.hello', protocol: 1, sentAt: 10, pluginApi: { major: 1, minor: 2 } },
+    { type: 'orca.workspace.created', workspaceId: 'workspace-1', receivedAt: 20 },
+    { type: 'orca.workspace.removed', workspaceId: 'workspace-1', receivedAt: 30 }
+  ])
+})
+
+test('activation does not block hooks or commands and handshakes after the companion is ready', async () => {
+  const ready = deferred()
+  const sent = []
+  const events = new Map()
+  const commands = new Map()
+  const ensureCalls = []
+  const relay = createRelay({ now: () => 100, post: async (payload) => sent.push(payload) })
+  activate({
+    events: { on: (name, callback) => events.set(name, callback) },
+    commands: { register: (name, callback) => commands.set(name, callback) },
+    log() {}
+  }, {
+    relay,
+    companionManager: { ensure(options) { ensureCalls.push(options); return ready.promise } }
+  })
+  assert.deepEqual([...events.keys()], ['agent.status.changed', 'workspace.created', 'workspace.removed'])
+  assert.equal(events.get('agent.status.changed')(event('working', 1)), undefined)
+  assert.equal(commands.get('orca-island.install-start')().status, 'preparing')
+  await new Promise(setImmediate)
+  assert.equal(ensureCalls.length, 1, 'Concurrent install/open commands share the preparation')
+  await relay.idle()
+  assert.deepEqual(sent.map(({ type }) => type), ['orca.agent.status'])
+  ready.resolve({ status: 'running' })
+  await new Promise(setImmediate)
+  await relay.idle()
+  assert.deepEqual(sent.at(-1), { type: 'orca.bridge.hello', protocol: 1, sentAt: 100 })
+  events.get('agent.status.changed')(event('done', 2))
+  events.get('workspace.removed')({ workspaceId: 'workspace', receivedAt: 3 })
+  await relay.idle()
+  assert.deepEqual(sent.slice(-2).map(({ type }) => type), ['orca.agent.status', 'orca.workspace.removed'])
+  assert.equal(commands.get('orca-island.open')().status, 'preparing')
+  await new Promise(setImmediate)
+  await relay.idle()
+  assert.deepEqual(ensureCalls, [{ retry: false }, { retry: true }])
+  assert.equal(sent.at(-1).type, 'orca.bridge.hello')
+})
+
+test('does not announce a bridge for an unsuccessful preparation', async () => {
+  const sent = []
+  const relay = createRelay({ post: async (payload) => sent.push(payload) })
+  activate({ events: { on() {} }, commands: { register() {} }, log() {} }, {
+    relay,
+    companionManager: { ensure: async () => ({ status: 'failed' }) }
+  })
+  await new Promise(setImmediate)
+  await relay.idle()
+  assert.deepEqual(sent, [])
+})
+
+test('HTTP delivery aborts after one second instead of blocking later events indefinitely', async (context) => {
+  let signal
+  context.mock.method(globalThis, 'fetch', async (_url, options) => {
+    signal = options.signal
+    await new Promise((resolve, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+    })
+  })
+  const logs = []
+  const relay = createRelay({ retryDelays: [], log: (line) => logs.push(line) })
+  relay.handle(event('working', 1))
+  await relay.idle()
+  assert.equal(signal.aborted, true)
+  assert.equal(logs.length, 1)
 })

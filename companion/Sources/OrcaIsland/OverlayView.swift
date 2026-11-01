@@ -109,13 +109,17 @@ struct OverlayView: View {
     private var measuredContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             if store.syncUnavailable {
-                Text("同步中断 · 以下为上次状态")
+                Text(store.usingEventBridge ? "校准中断 · 保留已接收状态" : "同步中断 · 以下为上次状态")
                     .font(.system(size: 11))
                     .foregroundStyle(.orange)
             }
-            Text("\(store.workspaceGroups.count) 个工作区 · \(store.sessions.count) 个对话")
-                .font(.system(size: 10))
-                .foregroundStyle(.white.opacity(0.45))
+            HStack {
+                Text("\(store.workspaceGroups.count) 个工作区 · \(store.sessions.count) 个对话")
+                Spacer()
+                Text(store.usingEventBridge ? "事件推送 · 45 秒校准" : "兼容轮询 · 2 秒")
+            }
+            .font(.system(size: 10))
+            .foregroundStyle(.white.opacity(0.45))
 
             if store.sessions.isEmpty {
                 Text("等待 Orca 会话")
