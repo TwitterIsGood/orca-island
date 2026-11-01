@@ -1,2 +1,4 @@
 companion/.build/
 dist/
+.validation/
+.DS_Store

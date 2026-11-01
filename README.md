@@ -1,32 +1,23 @@
 # Orca Island
 
-把 Orca 的智能体状态放到 macOS 刘海灵动岛：按工作区分组显示运行中的对话、终端标题和状态，点击对话可以跳回 Orca 终端。
+把 Orca 的智能体状态放到 Mac 顶部灵动岛。按工作区分组，显示每个对话的终端标题和运行状态，点击对话即可跳回对应的 Orca 终端。
 
 ![Orca Island](artifacts/orca-island-grouped.png)
 
-## 使用
+## 怎么用
 
-1. 构建并启动灵动岛：
+需要 macOS 13+、Orca 1.4.245+ 和 Xcode Command Line Tools（提供 Swift 编译器）。
+
+1. 下载、构建并启动：
 
    ```bash
+   git clone https://github.com/TwitterIsGood/orca-island.git
+   cd orca-island
    ./scripts/build-companion.sh
    open dist/OrcaIsland.app
    ```
 
-2. 在 Orca → Settings → Plugins 中打开插件系统。
-3. 添加这个仓库目录作为 Development folder，然后 Review & Enable：
+2. 点击屏幕顶部的胶囊展开工作区和对话列表。应用每 2 秒读取本机 Orca 的终端状态。
+3. 启用实时更新：Orca → Settings → Plugins → 打开插件系统 → 从 Git URL 安装 `https://github.com/TwitterIsGood/orca-island` → Review & Enable **Orca Island**。
 
-   ```text
-   /path/to/orca-island
-   ```
-
-灵动岛每 2 秒读取 Orca 的终端和 Agent 状态。插件启用后，会通过 `agent.status.changed` 实时更新。
-
-## 开发
-
-```bash
-node --test tests/main.test.mjs
-swift build --package-path companion
-```
-
-插件入口是根目录的 [`orca-plugin.json`](orca-plugin.json) 和 [`main.mjs`](main.mjs)。
+这是 Orca 插件 + macOS 原生伴侣，原生伴侣需要保持运行。仅显示状态和跳转会话，暂不支持在灵动岛内审批工具。
