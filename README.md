@@ -2,9 +2,9 @@
 
 把 Orca 的智能体状态放到 Mac 顶部灵动岛。按工作区分组，显示每个对话的终端标题和运行状态，点击对话即可跳回对应的 Orca 终端。
 
-![Orca Island](https://raw.githubusercontent.com/TwitterIsGood/orca-island/main/artifacts/orca-island-preview.jpg)
+![Orca Island](https://github.com/user-attachments/assets/a60433ce-070b-41b9-993e-e4901c1350fa)
 
-[查看原图](https://github.com/TwitterIsGood/orca-island/blob/main/artifacts/orca-island-preview.jpg)
+[查看原图](https://github.com/user-attachments/assets/a60433ce-070b-41b9-993e-e4901c1350fa)
 
 ## 怎么用
 
