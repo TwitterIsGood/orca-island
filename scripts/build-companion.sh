@@ -40,6 +40,7 @@ done
 EXECUTABLE="$APP/Contents/MacOS/OrcaIsland"
 if [[ ${#BINARIES[@]} -eq 2 ]]; then xcrun lipo -create "${BINARIES[@]}" -output "$EXECUTABLE"; else cp "${BINARIES[0]}" "$EXECUTABLE"; fi
 chmod +x "$EXECUTABLE"
+cp "$ROOT/scripts/orca-snapshot.cjs" "$ROOT/scripts/orca-projection.cjs" "$APP/Contents/Resources/"
 xcrun lipo "$EXECUTABLE" -verify_arch "${ARCHITECTURES[@]}"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

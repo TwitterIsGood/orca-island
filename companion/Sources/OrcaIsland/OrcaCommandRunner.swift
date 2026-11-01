@@ -23,6 +23,24 @@ enum OrcaCommandRunner {
     @discardableResult
     static func run(_ arguments: [String], timeout: TimeInterval = 3) -> Data? {
         guard let executable = executableURL() else { return nil }
+        return execute(executable, arguments: arguments, timeout: timeout)
+    }
+
+    static func runHelper(_ arguments: [String], timeout: TimeInterval = 12) -> Data? {
+        guard let cli = executableURL()?.resolvingSymlinksInPath() else { return nil }
+        let contents = cli.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let electron = contents.appendingPathComponent("MacOS/Orca")
+        let candidates = [Bundle.main.resourceURL?.appendingPathComponent("orca-snapshot.cjs"),
+                          URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+                            .deletingLastPathComponent().deletingLastPathComponent()
+                            .deletingLastPathComponent().appendingPathComponent("scripts/orca-snapshot.cjs")]
+        guard FileManager.default.isExecutableFile(atPath: electron.path),
+              let helper = candidates.compactMap({ $0 }).first(where: { FileManager.default.fileExists(atPath: $0.path) }) else { return nil }
+        return execute(electron, arguments: [helper.path] + arguments, timeout: timeout, nodeMode: true)
+    }
+
+    private static func execute(_ executable: URL, arguments: [String], timeout: TimeInterval,
+                                nodeMode: Bool = false) -> Data? {
         let process = Process()
         let output = Pipe()
         let errors = Pipe()
@@ -36,6 +54,11 @@ enum OrcaCommandRunner {
 
         // A GUI launch has a minimal PATH; the Orca shell launcher still needs bash.
         var environment = ProcessInfo.processInfo.environment
+        // Never inherit this task's terminal/workspace/remote selectors into a desktop-wide read.
+        environment = environment.filter { !$0.key.hasPrefix("ORCA_") }
+        environment.removeValue(forKey: "NODE_OPTIONS")
+        environment.removeValue(forKey: "NODE_REPL_EXTERNAL_MODULE")
+        if nodeMode { environment["ELECTRON_RUN_AS_NODE"] = "1" }
         environment["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin:" + (environment["PATH"] ?? "")
         process.environment = environment
 

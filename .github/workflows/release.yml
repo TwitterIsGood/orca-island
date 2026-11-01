@@ -41,8 +41,11 @@ jobs:
           node --test tests/*.test.mjs
           ./tests/check-native.sh
           ./tests/check-input.sh
+          ./tests/check-outside-click.sh
+          ./tests/check-expansion.sh
           ./tests/check-completions.sh
           ./tests/check-sync.sh
+          ./tests/check-fleet.sh
           ./tests/check-event-sync.sh
           ./tests/check-bridge.sh
           ./tests/check-http.sh

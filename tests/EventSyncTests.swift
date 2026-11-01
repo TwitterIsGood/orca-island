@@ -23,6 +23,12 @@ enum OrcaCommandRunner {
     }
 }
 
+final class OrcaSnapshotReader {
+    func read(startedAt: Date) -> OrcaPollSnapshot? {
+        preconditionFailure("The schedule harness must inject its reader")
+    }
+}
+
 @main
 enum EventSyncTests {
     static var checks = 0

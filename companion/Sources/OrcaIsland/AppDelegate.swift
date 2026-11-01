@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: NotchPanel?
     private var server: LocalHTTPServer?
     private var poller: OrcaStatusPoller?
+    private var outsideClickMonitor: OutsideClickMonitor?
     private var cancellables = Set<AnyCancellable>()
     private var resizeGeneration = 0
 
@@ -46,12 +47,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.store.replaceFromPoll(snapshot.events, snapshotStartedAt: snapshot.startedAt,
                                        livePaneKeys: snapshot.livePaneKeys)
             self?.store.recordPollCount(snapshot.pollCount)
+            if !snapshot.unavailableHostIDs.isEmpty { self?.store.markSyncUnavailable() }
         })
         poller?.start()
 
-        store.$expanded
-            .removeDuplicates()
-            .sink { [weak self] expanded in self?.resizePanel(expanded: expanded) }
+        Self.observeExpansion(
+            in: store,
+            resize: { [weak self] expanded in self?.resizePanel(expanded: expanded) },
+            requestRefresh: { [weak self] in self?.poller?.requestRefresh(immediate: true) }
+        )
             .store(in: &cancellables)
 
         store.$measuredBodyHeight
@@ -75,8 +79,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        outsideClickMonitor?.stop()
         server?.stop()
         poller?.stop()
+    }
+
+    static func observeExpansion(in store: IslandStore, resize: @escaping (Bool) -> Void,
+                                 requestRefresh: @escaping () -> Void) -> AnyCancellable {
+        var generation = 0
+        return store.$expanded.removeDuplicates().sink { [weak store] expanded in
+            generation += 1
+            let scheduledGeneration = generation
+            // Prepare the outer canvas while SwiftUI still has the old state.
+            // Moving this resize into the animated update makes the inner shape's
+            // top position animate too, briefly separating it from the screen.
+            resize(expanded)
+            DispatchQueue.main.async {
+                guard let store, scheduledGeneration == generation,
+                      store.expanded == expanded else { return }
+                // @Published emits from willSet. The native preflight can consume
+                // that invalidation by laying out the old value (even with
+                // display:false). Redraw once the new value is committed instead
+                // of waiting for an unrelated Orca status event to wake the view.
+                store.objectWillChange.send()
+                // The poller queues its I/O separately; opening never waits on it.
+                if expanded { requestRefresh() }
+            }
+        }
     }
 
     @objc private func resumeSynchronization() {
@@ -92,10 +121,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if reconnecting { poller?.requestRefresh(immediate: true) }
         case .status(let event):
             let needsMetadata = !store.sessions.values.contains { $0.paneKey == event.paneKey && $0.terminalTitle != nil }
-            store.ingest(event)
+            let accepted = store.ingest(event)
             store.recordBridgeMessage(isStatus: true)
             poller?.confirmBridge()
-            if needsMetadata { poller?.requestRefresh() }
+            if !accepted || needsMetadata { poller?.requestRefresh() }
         case .workspace:
             store.recordBridgeMessage()
             poller?.confirmBridge()
@@ -148,6 +177,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.panel = panel
         resizePanel(expanded: false, animated: false)
         panel.orderFrontRegardless()
+        let monitor = OutsideClickMonitor(
+            panel: panel,
+            isExpanded: { [weak self] in self?.store.expanded == true },
+            collapse: { [weak self] in self?.store.expanded = false },
+            visibleFrame: { [weak self] in
+                guard let self else { return .zero }
+                return self.store.notchGeometry.panelFrame(
+                    expanded: self.store.expanded, bodyHeight: self.store.measuredBodyHeight
+                )
+            }
+        )
+        outsideClickMonitor = monitor
+        monitor.start()
     }
 
     private func resizePanel(expanded: Bool, animated: Bool = true) {
@@ -165,7 +207,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.panel?.orderFrontRegardless()
             }
         } else {
-            // Enlarge before @Published updates SwiftUI; the outer canvas never animates.
+            // Change only the canvas; the inner top-anchored shape owns animation.
             panel.setFrame(frame, display: true, animate: false)
             panel.orderFrontRegardless()
         }

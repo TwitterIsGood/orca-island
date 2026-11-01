@@ -16,6 +16,16 @@ struct IslandEvent: Codable {
     let receivedAt: Double?
     var terminalTitle: String? = nil
     var terminalId: String? = nil
+    var hostId: String? = nil
+    var environmentId: String? = nil
+    var environmentName: String? = nil
+    var workspaceLabel: String? = nil
+    var tabId: String? = nil
+    var leafId: String? = nil
+    var structuredSessionId: String? = nil
+    var stateStartedAt: Double? = nil
+    var isStale: Bool? = nil
+    var isHidden: Bool? = nil
 }
 
 struct AgentSession: Identifiable {
@@ -27,8 +37,23 @@ struct AgentSession: Identifiable {
     let mainAgentState: String?
     let receivedAt: Date
     let terminalTitle: String?
+    var hostId: String = "local"
+    var environmentId: String? = nil
+    var environmentName: String? = nil
+    var workspaceLabel: String? = nil
+    var tabId: String? = nil
+    var leafId: String? = nil
+    var terminalId: String? = nil
+    var structuredSessionId: String? = nil
+    var isStale: Bool = false
+
+    static func identity(hostId: String, paneKey: String) -> String {
+        // Length prefixes keep arbitrary host and pane identifiers collision-free.
+        "\(hostId.utf8.count):\(hostId)\(paneKey)"
+    }
 
     var workspaceName: String {
+        if let workspaceLabel, !workspaceLabel.isEmpty { return workspaceLabel }
         if let workspaceId, !workspaceId.isEmpty {
             return URL(fileURLWithPath: workspaceId).lastPathComponent
         }
@@ -58,6 +83,7 @@ struct AgentSession: Identifiable {
 
     var displayState: String {
         switch state {
+        case "idle": return "空闲"
         case "working": return "工作中"
         case "waiting": return "等待输入"
         case "blocked": return "已阻塞"
@@ -98,6 +124,7 @@ final class IslandStore: ObservableObject {
     private(set) var pushedStatusCount = 0
     private(set) var pollCount = 0
     private var eventArrivalByID: [String: Date] = [:]
+    private var hiddenByID: [String: IslandEvent] = [:]
 
     var visibleBodyHeight: CGFloat {
         min(max(44, measuredBodyHeight), notchGeometry.maximumBodyHeight)
@@ -112,7 +139,7 @@ final class IslandStore: ObservableObject {
     }
 
     var workspaceGroups: [WorkspaceGroup] {
-        Dictionary(grouping: sortedSessions, by: { $0.workspaceId ?? "unknown" })
+        Dictionary(grouping: sortedSessions, by: { AgentSession.identity(hostId: $0.hostId, paneKey: $0.workspaceId ?? "unknown") })
             .map { key, sessions in
                 WorkspaceGroup(id: key, name: sessions.first?.workspaceName ?? "未命名工作区", sessions: sessions)
             }
@@ -126,7 +153,31 @@ final class IslandStore: ObservableObject {
         sortedSessions.first
     }
 
-    func ingest(_ event: IslandEvent, arrivedAt: Date = Date()) {
+    @discardableResult
+    func ingest(_ original: IslandEvent, arrivedAt: Date = Date()) -> Bool {
+        var event = original
+        if event.hostId == nil && event.type == "orca.agent.status" {
+            let candidates = sessions.values.filter {
+                $0.paneKey == event.paneKey && (event.workspaceId == nil || $0.workspaceId == event.workspaceId)
+            }
+            let hidden = hiddenByID.values.filter {
+                $0.paneKey == event.paneKey && (event.workspaceId == nil || $0.workspaceId == event.workspaceId)
+            }
+            let hosts = Set(candidates.map(\.hostId) + hidden.map { $0.hostId ?? "local" })
+            guard hosts.count == 1, let host = hosts.first else { return false }
+            // The plugin stamps receipt on this desktop; remote authorities have their own clock.
+            // Reconcile remote events from their source instead of comparing unrelated clocks.
+            guard host == "local" else { return false }
+            event.hostId = host
+        }
+        let id = eventIdentity(event)
+        if let hidden = hiddenByID[id] {
+            let incoming = event.combinedState ?? event.state ?? event.mainAgent?.state
+            // Repeated done pings after acknowledgment must never resurrect a completed turn.
+            guard incoming != "done", incoming != "idle",
+                  (event.receivedAt ?? 0) > (hidden.receivedAt ?? 0) else { return true }
+            hiddenByID.removeValue(forKey: id)
+        }
         let previous = previousSession(for: event, in: sessions)
         let session = makeSession(from: event, previous: previous)
         sessions[session.id] = session
@@ -134,12 +185,27 @@ final class IslandStore: ObservableObject {
             eventArrivalByID[session.id] = arrivedAt
         }
         acknowledgeUpdates(completions: isNewCompletion(session, after: previous) ? [session] : [])
+        return true
     }
 
     func replaceFromPoll(_ events: [IslandEvent], snapshotStartedAt: Date? = nil,
                          livePaneKeys: Set<String>? = nil) {
+        let observedIDs = Set(events.map(eventIdentity))
+        hiddenByID = hiddenByID.filter { observedIDs.contains($0.key) }
         var snapshot: [String: AgentSession] = [:]
+        var explicitlyHidden = Set<String>()
         for event in events {
+            let id = eventIdentity(event)
+            if event.isHidden == true {
+                let previous = sessions[id]
+                let newerWorking = previous?.state == "working"
+                    && previous!.receivedAt.timeIntervalSince1970 * 1000 > (event.receivedAt ?? 0)
+                if newerWorking { snapshot[id] = previous; continue }
+                hiddenByID[id] = event
+                explicitlyHidden.insert(id)
+                continue
+            }
+            hiddenByID.removeValue(forKey: id)
             let previous = previousSession(for: event, in: snapshot)
                 ?? previousSession(for: event, in: sessions)
             let session = makeSession(from: event, previous: previous)
@@ -149,7 +215,9 @@ final class IslandStore: ObservableObject {
         // A missing hook is not a closed terminal. A snapshot also cannot delete
         // an event received after its terminal inventory was requested.
         for (id, previous) in sessions where snapshot[id] == nil {
-            let stillLive = previous.paneKey.map { livePaneKeys?.contains($0) == true } ?? false
+            if explicitlyHidden.contains(id) { continue }
+            let stillLive = livePaneKeys?.contains(id) == true
+                || (previous.hostId == "local" && previous.paneKey.map { livePaneKeys?.contains($0) == true } == true)
             let arrivedDuringPoll = snapshotStartedAt.map { start in
                 eventArrivalByID[id].map { $0 > start } ?? false
             } ?? false
@@ -162,7 +230,7 @@ final class IslandStore: ObservableObject {
         sessions = snapshot
         eventArrivalByID = eventArrivalByID.filter { snapshot[$0.key] != nil }
         lastSyncedAt = Date()
-        syncUnavailable = false
+        syncUnavailable = sessions.values.contains { $0.isStale }
         acknowledgeUpdates(completions: completions)
     }
 
@@ -187,17 +255,22 @@ final class IslandStore: ObservableObject {
          "sessionCount": sessions.count, "syncUnavailable": syncUnavailable,
          "lastBridgeAt": lastBridgeAt.map { $0.timeIntervalSince1970 * 1000 } as Any? ?? NSNull(),
          "lastReconciledAt": lastSyncedAt.map { $0.timeIntervalSince1970 * 1000 } as Any? ?? NSNull()]
+            .merging(["sessions": sortedSessions.map { session -> [String: Any] in
+                ["hostId": session.hostId, "environment": session.environmentName ?? "Local Mac",
+                 "workspaceId": session.workspaceId ?? "", "paneKey": session.paneKey ?? "",
+                 "state": session.state, "title": session.title, "stale": session.isStale]
+            }]) { _, new in new }
     }
 
     private func previousSession(for event: IslandEvent, in candidates: [String: AgentSession]) -> AgentSession? {
         if let paneKey = nonempty(event.paneKey) {
-            return candidates.values.first { $0.paneKey == paneKey }
+            return candidates[AgentSession.identity(hostId: event.hostId ?? "local", paneKey: paneKey)]
         }
-        return candidates[sessionKey(workspaceId: nonempty(event.workspaceId), paneKey: nil)]
+        return candidates[eventIdentity(event)]
     }
 
-    private func sessionKey(workspaceId: String?, paneKey: String?) -> String {
-        "\(workspaceId ?? "unknown"): \(paneKey ?? "unknown")"
+    private func eventIdentity(_ event: IslandEvent) -> String {
+        AgentSession.identity(hostId: event.hostId ?? "local", paneKey: event.paneKey ?? event.workspaceId ?? "unknown")
     }
 
     private func nonempty(_ value: String?) -> String? {
@@ -210,12 +283,14 @@ final class IslandStore: ObservableObject {
         let paneKey = nonempty(event.paneKey) ?? previous?.paneKey
         // Workspace metadata can arrive after a plugin event. Keep the pane's
         // identity stable so completion highlights and list identity survive.
-        let key = previous?.id ?? sessionKey(workspaceId: workspaceId, paneKey: paneKey)
+        let key = previous?.id ?? eventIdentity(event)
         let eventTime = Date(timeIntervalSince1970: (event.receivedAt ?? Date().timeIntervalSince1970 * 1000) / 1000)
         let isNewer = previous.map { eventTime > $0.receivedAt } ?? true
         let incomingState = event.combinedState ?? event.state
             ?? previous?.combinedState ?? event.mainAgent?.state ?? "unknown"
-        let state = isNewer ? incomingState : (previous?.state ?? incomingState)
+        // Read/idle projection may change without a new agent timestamp.
+        let projectsSameTimestamp = event.type == "orca.snapshot" && previous?.receivedAt == eventTime
+        let state = isNewer || projectsSameTimestamp ? incomingState : (previous?.state ?? incomingState)
         let receivedAt = isNewer ? eventTime : (previous?.receivedAt ?? eventTime)
         return AgentSession(
             id: key,
@@ -227,7 +302,16 @@ final class IslandStore: ObservableObject {
             receivedAt: receivedAt,
             // Poll titles come from the live terminal list, independently of the
             // hook timestamp, so even an old status snapshot can refresh a title.
-            terminalTitle: nonempty(event.terminalTitle) ?? previous?.terminalTitle
+            terminalTitle: nonempty(event.terminalTitle) ?? previous?.terminalTitle,
+            hostId: event.hostId ?? previous?.hostId ?? "local",
+            environmentId: event.environmentId ?? previous?.environmentId,
+            environmentName: event.environmentName ?? previous?.environmentName,
+            workspaceLabel: event.workspaceLabel ?? previous?.workspaceLabel,
+            tabId: event.tabId ?? previous?.tabId,
+            leafId: event.leafId ?? previous?.leafId,
+            terminalId: event.terminalId ?? previous?.terminalId,
+            structuredSessionId: event.structuredSessionId ?? previous?.structuredSessionId,
+            isStale: event.isStale ?? previous?.isStale ?? false
         )
     }
 

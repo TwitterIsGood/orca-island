@@ -109,17 +109,13 @@ struct OverlayView: View {
     private var measuredContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             if store.syncUnavailable {
-                Text(store.usingEventBridge ? "校准中断 · 保留已接收状态" : "同步中断 · 以下为上次状态")
+                Text(store.sessions.isEmpty ? "暂未连接 Orca" : "部分连接中断 · 显示上次状态")
                     .font(.system(size: 11))
                     .foregroundStyle(.orange)
             }
-            HStack {
-                Text("\(store.workspaceGroups.count) 个工作区 · \(store.sessions.count) 个对话")
-                Spacer()
-                Text(store.usingEventBridge ? "事件推送 · 45 秒校准" : "兼容轮询 · 2 秒")
-            }
-            .font(.system(size: 10))
-            .foregroundStyle(.white.opacity(0.45))
+            Text("\(store.workspaceGroups.count) 个工作区 · \(store.sessions.count) 个对话")
+                .font(.system(size: 10))
+                .foregroundStyle(.white.opacity(0.45))
 
             if store.sessions.isEmpty {
                 Text("等待 Orca 会话")
@@ -135,6 +131,12 @@ struct OverlayView: View {
                                 .fontWeight(.semibold)
                                 .foregroundStyle(.white)
                                 .lineLimit(1)
+                            if let environment = group.sessions.first?.environmentName {
+                                Text(environment)
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.white.opacity(0.4))
+                                    .lineLimit(1)
+                            }
                             Text("\(group.sessions.count)")
                                 .font(.system(size: 10, design: .monospaced))
                                 .foregroundStyle(.white.opacity(0.45))
@@ -166,7 +168,7 @@ struct OverlayView: View {
         } label: {
             HStack(alignment: .top, spacing: 8) {
                 Circle()
-                    .fill(session.tint)
+                    .fill(session.isStale ? .gray : session.tint)
                     .frame(width: 6, height: 6)
                     .padding(.top, 5)
                 Text(session.title)
@@ -175,9 +177,9 @@ struct OverlayView: View {
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                Text(session.displayState)
+                Text(session.isStale ? "暂未连接" : session.displayState)
                     .font(.system(size: 10))
-                    .foregroundStyle(session.tint)
+                    .foregroundStyle(session.isStale ? .gray : session.tint)
                     .padding(.top, 2)
                 Image(systemName: "arrow.up.forward")
                     .font(.system(size: 10))
