@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 private struct IslandBodyHeight: PreferenceKey {
     static var defaultValue: CGFloat = 0
@@ -29,13 +30,22 @@ struct OverlayView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(store.expanded ? "收起 Orca 会话" : "展开 Orca 会话")
-            .help("\(workingCount) 个工作中 · \(attentionCount) 个待处理 · \(store.sessions.count) 个对话")
+            .help("点击刘海两侧\(store.expanded ? "收起" : "展开") · \(workingCount) 个工作中 · \(attentionCount) 个待处理 · \(store.sessions.count) 个对话")
 
             if store.expanded {
-                ScrollView {
-                    measuredContent
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        measuredContent
+                    }
+                    .frame(height: store.visibleBodyHeight)
+                    .onReceive(store.$recentCompletionID.removeDuplicates()) { id in
+                        if let id {
+                            DispatchQueue.main.async {
+                                withAnimation { proxy.scrollTo(id, anchor: .center) }
+                            }
+                        }
+                    }
                 }
-                .frame(height: store.visibleBodyHeight)
             }
         }
         .frame(width: store.expanded ? geometry.expandedWidth : geometry.collapsedWidth)
@@ -168,6 +178,12 @@ struct OverlayView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .background {
+            if session.id == store.recentCompletionID {
+                RoundedRectangle(cornerRadius: 6).fill(.green.opacity(0.12))
+            }
+        }
+        .id(session.id)
         .help("\(session.title)\n\(session.workspaceName) · \(session.displayState)")
         .accessibilityLabel("\(session.workspaceName)，\(session.title)，\(session.displayState)")
     }

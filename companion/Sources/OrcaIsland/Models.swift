@@ -86,6 +86,7 @@ struct WorkspaceGroup: Identifiable {
 @MainActor
 final class IslandStore: ObservableObject {
     @Published private(set) var sessions: [String: AgentSession] = [:]
+    @Published private(set) var recentCompletionID: String?
     @Published var expanded = false
     @Published var notchGeometry = NotchGeometry.fallback
     @Published var measuredBodyHeight: CGFloat = 44
@@ -118,34 +119,85 @@ final class IslandStore: ObservableObject {
     }
 
     func ingest(_ event: IslandEvent) {
-        let session = makeSession(from: event)
-        sessions = sessions.filter { $0.value.paneKey != session.paneKey || $0.key == session.id }
+        let previous = previousSession(for: event, in: sessions)
+        let session = makeSession(from: event, previous: previous)
         sessions[session.id] = session
+        acknowledgeUpdates(completions: isNewCompletion(session, after: previous) ? [session] : [])
     }
 
     func replaceFromPoll(_ events: [IslandEvent]) {
-        sessions = Dictionary(uniqueKeysWithValues: events.map { event in
-            let session = makeSession(from: event)
-            return (session.id, session)
-        })
+        var snapshot: [String: AgentSession] = [:]
+        for event in events {
+            let previous = previousSession(for: event, in: snapshot)
+                ?? previousSession(for: event, in: sessions)
+            let session = makeSession(from: event, previous: previous)
+            snapshot[session.id] = session
+        }
+
+        // Compare the final snapshot, not intermediate duplicate records. Loading
+        // historical working/done entries must not manufacture a new completion.
+        let completions = snapshot.values.filter { isNewCompletion($0, after: sessions[$0.id]) }
+        sessions = snapshot
+        acknowledgeUpdates(completions: completions)
     }
 
-    private func makeSession(from event: IslandEvent) -> AgentSession {
-        let previous = sessions.values.first { $0.paneKey == event.paneKey && event.paneKey != nil }
-        let workspaceId = event.workspaceId ?? previous?.workspaceId
-        let key = "\(workspaceId ?? "unknown"): \(event.paneKey ?? "unknown")"
-        let state = event.state ?? event.combinedState ?? event.mainAgent?.state ?? "unknown"
-        let combinedState = event.combinedState ?? event.state ?? state
-        let receivedAt = Date(timeIntervalSince1970: (event.receivedAt ?? Date().timeIntervalSince1970 * 1000) / 1000)
+    private func previousSession(for event: IslandEvent, in candidates: [String: AgentSession]) -> AgentSession? {
+        if let paneKey = nonempty(event.paneKey) {
+            return candidates.values.first { $0.paneKey == paneKey }
+        }
+        return candidates[sessionKey(workspaceId: nonempty(event.workspaceId), paneKey: nil)]
+    }
+
+    private func sessionKey(workspaceId: String?, paneKey: String?) -> String {
+        "\(workspaceId ?? "unknown"): \(paneKey ?? "unknown")"
+    }
+
+    private func nonempty(_ value: String?) -> String? {
+        guard let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return value
+    }
+
+    private func makeSession(from event: IslandEvent, previous: AgentSession?) -> AgentSession {
+        let workspaceId = nonempty(event.workspaceId) ?? previous?.workspaceId
+        let paneKey = nonempty(event.paneKey) ?? previous?.paneKey
+        // Workspace metadata can arrive after a plugin event. Keep the pane's
+        // identity stable so completion highlights and list identity survive.
+        let key = previous?.id ?? sessionKey(workspaceId: workspaceId, paneKey: paneKey)
+        let eventTime = Date(timeIntervalSince1970: (event.receivedAt ?? Date().timeIntervalSince1970 * 1000) / 1000)
+        let isNewer = previous.map { eventTime > $0.receivedAt } ?? true
+        let incomingState = event.combinedState ?? event.state
+            ?? previous?.combinedState ?? event.mainAgent?.state ?? "unknown"
+        let state = isNewer ? incomingState : (previous?.state ?? incomingState)
+        let receivedAt = isNewer ? eventTime : (previous?.receivedAt ?? eventTime)
         return AgentSession(
             id: key,
             workspaceId: workspaceId,
-            paneKey: event.paneKey,
+            paneKey: paneKey,
             state: state,
-            combinedState: combinedState,
-            mainAgentState: event.mainAgent?.state,
+            combinedState: state,
+            mainAgentState: isNewer ? (event.mainAgent?.state ?? previous?.mainAgentState) : previous?.mainAgentState,
             receivedAt: receivedAt,
-            terminalTitle: event.terminalTitle ?? previous?.terminalTitle
+            // Poll titles come from the live terminal list, independently of the
+            // hook timestamp, so even an old status snapshot can refresh a title.
+            terminalTitle: nonempty(event.terminalTitle) ?? previous?.terminalTitle
         )
+    }
+
+    private func isNewCompletion(_ session: AgentSession, after previous: AgentSession?) -> Bool {
+        guard let previous else { return false }
+        return previous.state == "working" && session.state == "done"
+            && session.receivedAt > previous.receivedAt
+    }
+
+    private func acknowledgeUpdates(completions: [AgentSession]) {
+        if let recentCompletionID, sessions[recentCompletionID]?.state != "done" {
+            self.recentCompletionID = nil
+        }
+        guard let latest = completions.sorted(by: {
+            if $0.receivedAt != $1.receivedAt { return $0.receivedAt > $1.receivedAt }
+            return $0.id < $1.id
+        }).first else { return }
+        recentCompletionID = latest.id
+        expanded = true
     }
 }

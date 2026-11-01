@@ -81,16 +81,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
-        panel.level = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue + 3)
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         panel.isMovable = false
         panel.hidesOnDeactivate = false
         panel.isFloatingPanel = true
+        // isFloatingPanel resets level to .floating, so set our level afterwards.
+        panel.level = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue + 3)
         panel.becomesKeyOnlyIfNeeded = true
         panel.titleVisibility = .hidden
         panel.title = "Orca Island"
         panel.titlebarAppearsTransparent = true
-        let hosting = NSHostingView(rootView: OverlayView(store: store))
+        let hosting = NotchHostingView(rootView: OverlayView(store: store))
         hosting.sizingOptions = []
         panel.contentView = hosting
         self.panel = panel

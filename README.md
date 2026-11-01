@@ -19,7 +19,7 @@
    open dist/OrcaIsland.app
    ```
 
-2. 点击刘海两侧展开工作区和对话列表，列表较长时可滚动。应用每 2 秒读取本机 Orca 的终端状态。
+2. 点击刘海左侧 **Orca** 或右侧**数字**展开/收起，列表较长时可滚动。任务从进行中变为完成时会自动展开并标出对应对话，直到手动收起；启动时已有的完成任务不会弹出。应用每 2 秒读取本机 Orca 的终端状态。
 3. 启用实时更新：Orca → Settings → Plugins → 打开插件系统 → 从 Git URL 安装 `https://github.com/TwitterIsGood/orca-island` → Review & Enable **Orca Island**。
 
 这是 Orca 插件 + macOS 原生伴侣，原生伴侣需要保持运行。仅显示状态和跳转会话，暂不支持在灵动岛内审批工具。
