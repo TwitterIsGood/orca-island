@@ -3,6 +3,11 @@ import SwiftUI
 struct NotchSilhouette: Shape {
     var bottomRadius: CGFloat
 
+    var animatableData: CGFloat {
+        get { bottomRadius }
+        set { bottomRadius = newValue }
+    }
+
     func path(in rect: CGRect) -> Path {
         let shoulder: CGFloat = 6
         let radius = min(bottomRadius, rect.height / 2)

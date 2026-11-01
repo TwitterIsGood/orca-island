@@ -32,37 +32,34 @@ struct OverlayView: View {
             .accessibilityLabel(store.expanded ? "收起 Orca 会话" : "展开 Orca 会话")
             .help("点击刘海两侧\(store.expanded ? "收起" : "展开") · \(workingCount) 个工作中 · \(attentionCount) 个待处理 · \(store.sessions.count) 个对话")
 
-            if store.expanded {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        measuredContent
-                    }
-                    .frame(height: store.visibleBodyHeight)
-                    .onReceive(store.$recentCompletionID.removeDuplicates()) { id in
-                        if let id {
-                            DispatchQueue.main.async {
-                                withAnimation { proxy.scrollTo(id, anchor: .center) }
-                            }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    measuredContent
+                }
+                .frame(height: store.visibleBodyHeight)
+                .onReceive(store.$recentCompletionID.removeDuplicates()) { id in
+                    if let id {
+                        DispatchQueue.main.async {
+                            withAnimation { proxy.scrollTo(id, anchor: .center) }
                         }
                     }
                 }
-                .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
             }
+            .opacity(store.expanded ? 1 : 0)
+            .allowsHitTesting(store.expanded)
+            .accessibilityHidden(!store.expanded)
+            .frame(height: store.expanded ? store.visibleBodyHeight : 0, alignment: .top)
+            .clipped()
         }
         .frame(width: store.expanded ? geometry.expandedWidth : geometry.collapsedWidth)
         .background(Color.black)
         .clipShape(NotchSilhouette(bottomRadius: store.expanded ? 20 : 13))
         .shadow(color: .black.opacity(store.expanded ? 0.38 : 0), radius: 12, y: 5)
-        .background(alignment: .top) {
-            if !store.expanded {
-                // Measure the next layout without giving the closed window a large hit region.
-                measuredContent.hidden().allowsHitTesting(false).accessibilityHidden(true)
-            }
-        }
+        .animation(.spring(response: 0.42, dampingFraction: 0.9), value: store.expanded)
+        .animation(.easeInOut(duration: 0.25), value: store.visibleBodyHeight)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .ignoresSafeArea()
         .preferredColorScheme(.dark)
-        .animation(.spring(response: 0.42, dampingFraction: 0.82), value: store.expanded)
         .onPreferenceChange(IslandBodyHeight.self) { height in
             let rounded = ceil(height)
             if rounded > 0 && abs(rounded - store.measuredBodyHeight) > 0.5 {
