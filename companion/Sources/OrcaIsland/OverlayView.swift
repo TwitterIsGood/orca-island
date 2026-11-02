@@ -8,6 +8,11 @@ private struct IslandBodyHeight: PreferenceKey {
     }
 }
 
+private struct IslandLayoutTarget: Equatable {
+    let expanded: Bool
+    let bodyHeight: CGFloat
+}
+
 struct OverlayView: View {
     @ObservedObject var store: IslandStore
 
@@ -56,8 +61,12 @@ struct OverlayView: View {
         .background(Color.black)
         .clipShape(NotchSilhouette(bottomRadius: store.expanded ? 20 : 13))
         .shadow(color: .black.opacity(store.expanded ? 0.38 : 0), radius: 12, y: 5)
-        .animation(.spring(response: 0.42, dampingFraction: 0.9), value: store.expanded)
-        .animation(.easeInOut(duration: 0.25), value: store.visibleBodyHeight)
+        // A spring carries its closing velocity into a rapid reopen, briefly
+        // shrinking the island after the click. One non-spring curve retargets
+        // width, height and content together toward the newly requested size.
+        .animation(.timingCurve(0.2, 0.8, 0.2, 1, duration: 0.26),
+                   value: IslandLayoutTarget(expanded: store.expanded,
+                                             bodyHeight: store.visibleBodyHeight))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .ignoresSafeArea()
         .preferredColorScheme(.dark)
