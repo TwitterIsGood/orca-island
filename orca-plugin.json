@@ -5,7 +5,7 @@
   "publisher": "twitterisgood",
   "id": "island-bridge",
   "name": "Orca Island",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Shows Orca agent status in a native macOS Dynamic Island companion.",
   "author": { "name": "TwitterIsGood", "url": "https://github.com/TwitterIsGood" },
   "repository": "https://github.com/TwitterIsGood/orca-island",
