@@ -11,11 +11,25 @@ final class OrcaSnapshotReader {
         let ok: Bool
         let hosts: [Host]
     }
+    private struct Failure: Decodable {
+        let ok: Bool
+        let error: String?
+    }
     private var lastByHost: [String: [IslandEvent]] = [:]
+    /// Why the most recent read failed; read on the poller's reader queue only.
+    private(set) var lastFailure: String?
 
     func read(startedAt: Date) -> OrcaPollSnapshot? {
-        guard let data = OrcaCommandRunner.runHelper(["snapshot"]),
-              let response = try? JSONDecoder().decode(Response.self, from: data), response.ok else { return nil }
+        guard let data = OrcaCommandRunner.runHelper(["snapshot"]) else {
+            lastFailure = "helper_failed"
+            return nil
+        }
+        guard let response = try? JSONDecoder().decode(Response.self, from: data), response.ok else {
+            let failure = try? JSONDecoder().decode(Failure.self, from: data)
+            lastFailure = failure?.error ?? "orca_snapshot_failed"
+            return nil
+        }
+        lastFailure = nil
         return reconcile(response, startedAt: startedAt)
     }
 

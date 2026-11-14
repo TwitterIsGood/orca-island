@@ -24,6 +24,7 @@ enum OrcaCommandRunner {
 }
 
 final class OrcaSnapshotReader {
+    var lastFailure: String? { nil }
     func read(startedAt: Date) -> OrcaPollSnapshot? {
         preconditionFailure("The schedule harness must inject its reader")
     }

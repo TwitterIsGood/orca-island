@@ -118,6 +118,7 @@ final class IslandStore: ObservableObject {
     @Published var notchGeometry = NotchGeometry.fallback
     @Published var measuredBodyHeight: CGFloat = 44
     @Published private(set) var syncUnavailable = false
+    @Published private(set) var syncFailure: String?
     @Published private(set) var lastSyncedAt: Date?
     @Published private(set) var usingEventBridge = false
     private(set) var lastBridgeAt: Date?
@@ -231,11 +232,25 @@ final class IslandStore: ObservableObject {
         eventArrivalByID = eventArrivalByID.filter { snapshot[$0.key] != nil }
         lastSyncedAt = Date()
         syncUnavailable = sessions.values.contains { $0.isStale }
+        syncFailure = syncUnavailable ? "remote_unreachable" : nil
         acknowledgeUpdates(completions: completions)
     }
 
-    func markSyncUnavailable() {
+    func markSyncUnavailable(reason: String? = nil) {
         syncUnavailable = true
+        if let reason { syncFailure = reason } else if syncFailure == nil { syncFailure = "orca_snapshot_failed" }
+    }
+
+    /// Short, user-facing explanation of `syncFailure`.
+    var syncFailureDescription: String? {
+        guard syncUnavailable else { return nil }
+        switch syncFailure {
+        case "orca_api_incompatible": return "Orca 已更新，接口不兼容，请更新 Orca Island"
+        case "orca_runtime_unreachable": return "Orca 未运行或无响应"
+        case "helper_failed": return "读取 Orca 状态超时或失败"
+        case "remote_unreachable": return "部分远程环境未连接 · 显示上次状态"
+        default: return "读取 Orca 状态失败"
+        }
     }
 
     func recordBridgeMessage(isStatus: Bool = false) {
@@ -253,6 +268,8 @@ final class IslandStore: ObservableObject {
          "reconciliationSeconds": usingEventBridge ? 45 : 2,
          "pollCount": pollCount, "pushedStatusCount": pushedStatusCount,
          "sessionCount": sessions.count, "syncUnavailable": syncUnavailable,
+         "syncFailure": (syncUnavailable ? syncFailure : nil) as Any? ?? NSNull(),
+         "syncFailureDescription": syncFailureDescription as Any? ?? NSNull(),
          "lastBridgeAt": lastBridgeAt.map { $0.timeIntervalSince1970 * 1000 } as Any? ?? NSNull(),
          "lastReconciledAt": lastSyncedAt.map { $0.timeIntervalSince1970 * 1000 } as Any? ?? NSNull()]
             .merging(["sessions": sortedSessions.map { session -> [String: Any] in

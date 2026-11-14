@@ -27,6 +27,8 @@ final class OrcaStatusPoller {
     private let onModeChange: ((SyncTransportMode) -> Void)?
     private let clock: () -> TimeInterval
     private let readSnapshot: (Date) -> OrcaPollSnapshot?
+    private let failureReason: () -> String?
+    private let onFailure: ((String) -> Void)?
     private var schedule = PollSchedule()
     private var pendingPoll: DispatchWorkItem?
     private var generation = 0
@@ -36,13 +38,17 @@ final class OrcaStatusPoller {
 
     init(onEvents: @escaping (OrcaPollSnapshot?) -> Void,
          onModeChange: ((SyncTransportMode) -> Void)? = nil,
+         onFailure: ((String) -> Void)? = nil,
          clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
          readSnapshot: ((Date) -> OrcaPollSnapshot?)? = nil) {
         self.onEvents = onEvents
         self.onModeChange = onModeChange
+        self.onFailure = onFailure
         self.clock = clock
         let reader = OrcaSnapshotReader()
         self.readSnapshot = readSnapshot ?? { reader.read(startedAt: $0) }
+        // Read on the reader queue right after `read`, so the reason matches that attempt.
+        self.failureReason = readSnapshot == nil ? { reader.lastFailure } : { nil }
     }
 
     func start() {
@@ -112,8 +118,12 @@ final class OrcaStatusPoller {
         readerQueue.async { [weak self] in
             guard let self else { return }
             let snapshot = self.readSnapshot(startedAt)
+            let reason = snapshot == nil ? self.failureReason() : nil
             self.queue.async { [weak self] in
                 guard let self, self.generation == token, self.schedule.isRunning else { return }
+                if let reason, let onFailure = self.onFailure {
+                    self.deliver(generation: deliveryToken) { onFailure(reason) }
+                }
                 self.schedule.finishPoll(at: self.clock(), succeeded: snapshot != nil && snapshot!.unavailableHostIDs.isEmpty)
                 let annotated = snapshot.map {
                     OrcaPollSnapshot(events: $0.events, livePaneKeys: $0.livePaneKeys,

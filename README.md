@@ -8,7 +8,7 @@
 
 ## 怎么用
 
-需要 macOS 13+、Orca 1.4.245+ 和 Xcode Command Line Tools（提供 Swift 编译器）。
+需要 macOS 13+、Orca 1.4.248+ 和 Xcode Command Line Tools（提供 Swift 编译器）。
 
 1. 下载、构建并启动：
 

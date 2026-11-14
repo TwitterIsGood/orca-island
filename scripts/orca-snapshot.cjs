@@ -5,11 +5,28 @@ const path = require('node:path')
 const fs = require('node:fs')
 const { projectHost, exactRevealTarget } = require('./orca-projection.cjs')
 
+// Orca 1.4.258 moved listEnvironments out of cli/runtime/environments.js into the shared
+// host store. Probe known locations so the companion survives Orca updates in either direction.
+function resolveListEnvironments(cli) {
+  const candidates = [
+    path.join(cli, 'runtime/environments.js'),
+    path.join(cli, '../shared/remote-runtime/host-store/runtime-environment-store.js')
+  ]
+  for (const file of candidates) {
+    try {
+      const fn = require(file).listEnvironments
+      if (typeof fn === 'function') return fn
+    } catch {}
+  }
+  // No environment catalog means local-only; never fail the whole snapshot for it.
+  return () => []
+}
+
 async function main() {
   const contents = path.dirname(path.dirname(process.execPath))
   const cli = path.join(contents, 'Resources/app.asar.unpacked/out/cli')
   const { RuntimeClient, getDefaultUserDataPath } = require(path.join(cli, 'runtime-client.js'))
-  const { listEnvironments } = require(path.join(cli, 'runtime/environments.js'))
+  const listEnvironments = resolveListEnvironments(cli)
   const { getActiveProfileStateLocation } = require(path.join(cli, 'profile-state-location.js'))
   const userData = getDefaultUserDataPath()
   const local = new RuntimeClient(userData, 5000, null, null)
@@ -85,8 +102,18 @@ async function main() {
   return { ok: true, hosts }
 }
 
-main().then(value => process.stdout.write(JSON.stringify(value))).catch(() => {
-  // Keep tokens, runtime paths, RPC payloads and conversation text out of diagnostics.
-  process.stdout.write(JSON.stringify({ ok: false, error: 'orca_snapshot_unavailable' }))
-  process.exitCode = 1
+// Classify without leaking tokens, paths, RPC payloads or conversation text.
+function failureCode(error) {
+  const text = String(error?.message ?? error)
+  if (error?.code === 'MODULE_NOT_FOUND' || /is not a (function|constructor)|Cannot read propert/i.test(text)) {
+    // Orca moved or renamed a private module this companion depends on.
+    return 'orca_api_incompatible'
+  }
+  if (/ECONNREFUSED|ENOENT|EPIPE|ECONNRESET|socket|timed? ?out|runtime/i.test(text)) return 'orca_runtime_unreachable'
+  return 'orca_snapshot_failed'
+}
+
+main().then(value => process.stdout.write(JSON.stringify(value))).catch(error => {
+  // Exit 0 so the companion can read the reason; `ok: false` still marks the failure.
+  process.stdout.write(JSON.stringify({ ok: false, error: failureCode(error) }))
 })

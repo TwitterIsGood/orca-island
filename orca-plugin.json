@@ -5,25 +5,65 @@
   "publisher": "twitterisgood",
   "id": "island-bridge",
   "name": "Orca Island",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Shows Orca agent status in a native macOS Dynamic Island companion.",
-  "author": { "name": "TwitterIsGood", "url": "https://github.com/TwitterIsGood" },
+  "author": {
+    "name": "TwitterIsGood",
+    "url": "https://github.com/TwitterIsGood"
+  },
   "repository": "https://github.com/TwitterIsGood/orca-island",
   "license": "MIT",
-  "engines": { "orca": ">=1.4.245" },
+  "engines": {
+    "orca": ">=1.4.248"
+  },
   "pluginApi": 1,
   "main": "main.mjs",
   "contributes": {
     "commands": [
-      { "id": "orca-island.send-test", "title": "Orca Island: Send test event" },
-      { "id": "orca-island.install-start", "title": "Orca Island: Install & Start" },
-      { "id": "orca-island.open", "title": "Orca Island: Open" }
+      {
+        "id": "orca-island.send-test",
+        "title": "Orca Island: Send test event"
+      },
+      {
+        "id": "orca-island.install-start",
+        "title": "Orca Island: Install & Start"
+      },
+      {
+        "id": "orca-island.open",
+        "title": "Orca Island: Open"
+      },
+      {
+        "id": "orca-island.restart",
+        "title": "Orca Island: Restart"
+      }
     ],
     "events": [
-      { "on": "agent.status.changed" },
-      { "on": "workspace.created" },
-      { "on": "workspace.removed" }
+      {
+        "on": "agent.status.changed"
+      },
+      {
+        "on": "workspace.created"
+      },
+      {
+        "on": "workspace.removed"
+      }
+    ],
+    "statusBarItems": [
+      {
+        "id": "island",
+        "text": "Island",
+        "icon": "activity",
+        "tooltip": "Orca Island · 点击重启",
+        "command": "orca-island.restart"
+      }
     ]
   },
-  "capabilities": [{ "kind": "agent:read" }, { "kind": "workspace:read" }]
+  "capabilities": [
+    {
+      "kind": "agent:read"
+    },
+    {
+      "kind": "workspace:read"
+    }
+  ]
 }

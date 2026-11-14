@@ -117,8 +117,8 @@ struct OverlayView: View {
 
     private var measuredContent: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if store.syncUnavailable {
-                Text(store.sessions.isEmpty ? "暂未连接 Orca" : "部分连接中断 · 显示上次状态")
+            if let failure = store.syncFailureDescription {
+                Text(failure)
                     .font(.system(size: 11))
                     .foregroundStyle(.orange)
             }

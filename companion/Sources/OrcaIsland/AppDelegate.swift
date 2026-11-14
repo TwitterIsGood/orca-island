@@ -47,7 +47,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.store.replaceFromPoll(snapshot.events, snapshotStartedAt: snapshot.startedAt,
                                        livePaneKeys: snapshot.livePaneKeys)
             self?.store.recordPollCount(snapshot.pollCount)
-            if !snapshot.unavailableHostIDs.isEmpty { self?.store.markSyncUnavailable() }
+            if !snapshot.unavailableHostIDs.isEmpty { self?.store.markSyncUnavailable(reason: "remote_unreachable") }
+        }, onFailure: { [weak self] reason in
+            self?.store.markSyncUnavailable(reason: reason)
         })
         poller?.start()
 

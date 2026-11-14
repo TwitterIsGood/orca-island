@@ -219,7 +219,8 @@ export function createRelay({
 
 export default function activate(orca, {
   companionManager = createCompanionManager({ log: (line) => orca.log(line) }),
-  relay = createRelay({ log: (line) => orca.log(line) })
+  relay = createRelay({ log: (line) => orca.log(line) }),
+  watchdogOptions = {}
 } = {}) {
 
   // Orca kills workers that keep too many events unacknowledged. Queue delivery
@@ -253,4 +254,156 @@ export default function activate(orca, {
   startCompanion()
   orca.commands.register('orca-island.install-start', () => startCompanion(true))
   orca.commands.register('orca-island.open', () => startCompanion(true))
+
+  let restarting = null
+  let lastRestartFinishedAt = -Infinity
+  function restartCompanion(reason = 'manual') {
+    // Repeated presses right after a restart would only kill a freshly healthy companion.
+    if (!restarting && Date.now() - lastRestartFinishedAt < 5_000) {
+      return { status: 'running', message: 'Orca Island was just restarted.' }
+    }
+    if (!restarting) {
+      watchdog.showRestarting()
+      restarting = Promise.resolve().then(() => companionManager.restart()).then((result) => {
+        if (result?.status === 'running') relay.hello()
+        orca.log(`Orca Island: ${reason} restart → ${result?.status ?? 'unknown'}`)
+        return result
+      }).catch((error) => {
+        orca.log(`Orca Island restart failed: ${error instanceof Error ? error.message : String(error)}`)
+      }).finally(() => {
+        restarting = null
+        lastRestartFinishedAt = Date.now()
+        watchdog.check()
+      })
+    }
+    return { status: 'restarting', message: 'Orca Island is restarting in the background.' }
+  }
+  orca.commands.register('orca-island.restart', () => restartCompanion('manual'))
+
+  const watchdog = createWatchdog({
+    update: (patch) => updateStatusBar(orca, patch),
+    restart: (reason) => restartCompanion(reason),
+    isBusy: () => Boolean(restarting || preparing),
+    log: (line) => orca.log(line),
+    ...watchdogOptions
+  })
+  watchdog.start()
+  return { watchdog }
+}
+
+const STATUS_URL = 'http://127.0.0.1:17777/status'
+const STATUS_BAR_ID = 'island'
+
+async function fetchCompanionStatus(timeoutMs = 1500) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(STATUS_URL, { signal: controller.signal })
+    if (!response.ok) return null
+    return await response.json()
+  } catch {
+    return null
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+function updateStatusBar(orca, patch) {
+  // Older Orca (< 1.4.248) has no status bar API; the watchdog still self-heals.
+  if (!orca.host?.has?.('statusBar.update')) return
+  Promise.resolve(orca.host.call('statusBar.update', { id: STATUS_BAR_ID, ...patch })).catch(() => {})
+}
+
+/**
+ * Keeps the companion alive and visible:
+ * - offline (no HTTP answer) twice in a row → relaunch, at most once per `offlineCooldownMs`;
+ * - sync stuck unavailable for `stuckAfterMs` → restart, at most once per `stuckCooldownMs`
+ *   (a restart clears hung helpers; it cannot fix an API break, so it is rate-limited);
+ * - the status bar always shows the current state and pressing it restarts.
+ */
+export function createWatchdog({
+  update = () => {},
+  restart = () => {},
+  isBusy = () => false,
+  log = () => {},
+  fetchStatus = fetchCompanionStatus,
+  now = Date.now,
+  intervalMs = 15_000,
+  offlineCooldownMs = 60_000,
+  stuckAfterMs = 3 * 60_000,
+  stuckCooldownMs = 10 * 60_000,
+  setIntervalImpl = setInterval,
+  clearIntervalImpl = clearInterval
+} = {}) {
+  let timer = null
+  let checking = null
+  let offlineStreak = 0
+  let unavailableSince = null
+  let lastAutoRestart = -Infinity
+  let lastPatch = ''
+
+  function show(patch) {
+    const key = JSON.stringify(patch)
+    if (key === lastPatch) return
+    lastPatch = key
+    update(patch)
+  }
+
+  function autoRestart(reason, cooldownMs) {
+    if (now() - lastAutoRestart < cooldownMs) return false
+    lastAutoRestart = now()
+    log(`Orca Island watchdog: ${reason}, restarting`)
+    restart(reason)
+    return true
+  }
+
+  async function tick() {
+    if (isBusy()) return
+    const status = await fetchStatus()
+    if (isBusy()) return
+    if (!status) {
+      offlineStreak += 1
+      unavailableSince = null
+      show({ text: 'Island 离线', icon: 'warning', tone: 'danger', tooltip: 'Orca Island 未运行 · 点击重启' })
+      if (offlineStreak >= 2) autoRestart('offline', offlineCooldownMs)
+      return
+    }
+    offlineStreak = 0
+    const count = Number.isInteger(status.sessionCount) ? status.sessionCount : 0
+    if (status.syncUnavailable) {
+      unavailableSince ??= now()
+      const detail = status.syncFailureDescription || '读取 Orca 状态失败'
+      const partial = status.syncFailure === 'remote_unreachable'
+      show({ text: partial ? `Island ${count} · 部分断连` : 'Island 断连', icon: 'warning',
+        tone: partial ? 'warning' : 'danger', tooltip: `${detail} · 点击重启 Orca Island`.slice(0, 256) })
+      // A remote machine being offline is not something a local restart can fix.
+      if (!partial && now() - unavailableSince >= stuckAfterMs) autoRestart('sync stuck', stuckCooldownMs)
+      return
+    }
+    unavailableSince = null
+    show({ text: `Island ${count}`, icon: 'activity', tone: 'neutral', tooltip: 'Orca Island 运行正常 · 点击重启' })
+  }
+
+  function check() {
+    if (!checking) checking = tick().catch(() => {}).finally(() => { checking = null })
+    return checking
+  }
+
+  return {
+    start() {
+      if (timer) return
+      check()
+      timer = setIntervalImpl(check, intervalMs)
+      // Never keep a test process alive; Orca keeps the worker running while the plugin is enabled.
+      timer?.unref?.()
+    },
+    stop() {
+      if (timer) clearIntervalImpl(timer)
+      timer = null
+    },
+    check,
+    showRestarting() {
+      show({ text: 'Island 重启中…', icon: 'refresh', tone: 'accent', tooltip: '正在重启 Orca Island' })
+    }
+  }
 }
