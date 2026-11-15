@@ -132,6 +132,20 @@ enum ExpansionLatencyTests {
         expect(refreshes == refreshesBefore + 1, "Superseded expansions must not trigger refreshes")
         expect(!panel.isVisible && !NSApp.isActive,
                "The regression harness must never show or activate a window")
+        let delegate = AppDelegate()
+        expect(!delegate.applicationShouldHandleReopen(NSApplication.shared, hasVisibleWindows: false),
+               "Reopening the accessory companion must not open a default window")
+        expect(!delegate.applicationShouldHandleReopen(NSApplication.shared, hasVisibleWindows: true),
+               "Reopening while the notch panel exists must not open an auxiliary window")
+        expect(delegate.applicationSupportsSecureRestorableState(NSApplication.shared),
+               "Companion must opt into secure restorable state")
+        let entryURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("companion/Sources/OrcaIsland/OrcaIslandApp.swift")
+        let entrySource = (try? String(contentsOf: entryURL, encoding: .utf8)) ?? ""
+        expect(!entrySource.isEmpty && !entrySource.contains("Settings") && !entrySource.contains("WindowGroup"),
+               "Entry point must use pure NSApplication without SwiftUI Settings or WindowGroup scenes")
         print("Expansion regression passed: 4/6/100 sessions render without follow-up events, canvas preflight before animation, rapid-toggle refresh coalescing, top anchoring. First body ms: \(latencies.map { String(format: "%.2f", $0) }.joined(separator: ", ")).")
     }
 

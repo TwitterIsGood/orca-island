@@ -35,13 +35,16 @@ BINARIES=()
 for BUILD_ARCH in "${ARCHITECTURES[@]}"; do
   swift build --package-path "$ROOT/companion" --configuration "$CONFIGURATION" --arch "$BUILD_ARCH" --product OrcaIsland
   BIN_DIR="$(swift build --package-path "$ROOT/companion" --configuration "$CONFIGURATION" --arch "$BUILD_ARCH" --show-bin-path)"
-  BINARIES+=("$BIN_DIR/OrcaIsland")
+  ARCH_BINARY="$STAGE/OrcaIsland-$BUILD_ARCH"
+  cp "$BIN_DIR/OrcaIsland" "$ARCH_BINARY"
+  BINARIES+=("$ARCH_BINARY")
 done
 EXECUTABLE="$APP/Contents/MacOS/OrcaIsland"
 if [[ ${#BINARIES[@]} -eq 2 ]]; then xcrun lipo -create "${BINARIES[@]}" -output "$EXECUTABLE"; else cp "${BINARIES[0]}" "$EXECUTABLE"; fi
+rm -f "${BINARIES[@]}"
 chmod +x "$EXECUTABLE"
 cp "$ROOT/scripts/orca-snapshot.cjs" "$ROOT/scripts/orca-projection.cjs" "$APP/Contents/Resources/"
-xcrun lipo "$EXECUTABLE" -verify_arch "${ARCHITECTURES[@]}"
+for BUILD_ARCH in "${ARCHITECTURES[@]}"; do xcrun lipo "$EXECUTABLE" -verify_arch "$BUILD_ARCH"; done
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

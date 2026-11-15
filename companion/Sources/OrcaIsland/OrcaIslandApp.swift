@@ -1,12 +1,16 @@
-import SwiftUI
+import AppKit
 
 @main
-struct OrcaIslandApp: App {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+@MainActor
+enum OrcaIslandApp {
+    private static let delegate = AppDelegate()
 
-    var body: some Scene {
-        Settings {
-            EmptyView()
+    static func main() {
+        let app = NSApplication.shared
+        app.setActivationPolicy(.accessory)
+        app.delegate = delegate
+        withExtendedLifetime(delegate) {
+            app.run()
         }
     }
 }

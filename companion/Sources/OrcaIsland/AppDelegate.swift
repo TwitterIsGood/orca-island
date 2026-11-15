@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        UserDefaults.standard.removeObject(forKey: "NSWindow Frame com_apple_SwiftUI_Settings_window")
         createPanel()
 
         do {
@@ -84,6 +85,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         outsideClickMonitor?.stop()
         server?.stop()
         poller?.stop()
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        false
+    }
+
+    func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
+        true
     }
 
     static func observeExpansion(in store: IslandStore, resize: @escaping (Bool) -> Void,
