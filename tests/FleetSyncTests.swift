@@ -57,14 +57,33 @@ enum FleetSyncTests {
                 .init(hostId: "local", available: true, events: local),
                 .init(hostId: "runtime:remote", available: available, events: remote)])
         }
-        _ = reader.reconcile(response([event("working")], [event("working", host: "runtime:remote")]), startedAt: start)
-        let failed = reader.reconcile(response([], [], available: false), startedAt: start)!
-        expect(failed.events.count == 1 && failed.events.first?.hostId == "runtime:remote", "Local closed rows disappear while remote failure preserves only remote rows")
-        expect(failed.events.first?.isStale == true && failed.unavailableHostIDs == ["runtime:remote"], "Retained remote data is visibly stale")
+        _ = reader.reconcile(response([event("working")], [
+            {
+                var remote = event("waiting", host: "runtime:remote")
+                remote.environmentName = "公司CentOS7工作站"
+                return remote
+            }()
+        ]), startedAt: start)
+        let failed = reader.reconcile(response([event("done", time: 2000)], [], available: false), startedAt: start)!
+        expect(failed.events.count == 2 && failed.unavailableHostIDs == ["runtime:remote"], "Local live rows and retained remote rows coexist")
+        let fleetStore = IslandStore()
+        fleetStore.replaceFromPoll(failed.events, livePaneKeys: failed.livePaneKeys, unavailableHostIDs: failed.unavailableHostIDs)
+        expect(fleetStore.syncUnavailable && fleetStore.syncFailure == "remote_unreachable", "Retained stale remote rows mark remote_unreachable")
+        expect(fleetStore.syncFailureDescription == "公司CentOS7工作站 未连接 · 显示上次状态", "Specific offline environment is named")
+        expect(fleetStore.sortedSessions.first?.hostId == "local" && fleetStore.sortedSessions.last?.isStale == true,
+               "Live sessions sort ahead of stale remote history")
         let recovered = reader.reconcile(response([], []), startedAt: start)!
         expect(recovered.events.isEmpty && recovered.livePaneKeys.isEmpty, "Only a successful empty remote snapshot confirms removal")
-        let cold = OrcaSnapshotReader().reconcile(response([], [], available: false), startedAt: start)!
-        expect(!cold.unavailableHostIDs.isEmpty, "A cold-start remote failure is reported even without cached sessions")
+        let cold = OrcaSnapshotReader().reconcile(response([event("working")], [], available: false), startedAt: start)!
+        expect(!cold.unavailableHostIDs.isEmpty, "A cold-start remote failure is still tracked in snapshot diagnostics")
+        fleetStore.replaceFromPoll(cold.events, livePaneKeys: cold.livePaneKeys, unavailableHostIDs: cold.unavailableHostIDs)
+        expect(!fleetStore.syncUnavailable && fleetStore.syncFailureDescription == nil,
+               "An unused offline remote environment never triggers a false disconnected warning")
+        expect((fleetStore.synchronizationDiagnostics["unavailableHosts"] as? [String]) == ["runtime:remote"],
+               "Diagnostics still expose offline host identifiers")
+        fleetStore.replaceFromPoll([], livePaneKeys: [], unavailableHostIDs: ["local"])
+        expect(fleetStore.syncUnavailable && fleetStore.syncFailure == "orca_snapshot_failed",
+               "Local inventory failure still marks sync unavailable")
         print("Fleet sync passed (\(checks) assertions); anonymous fixtures, no runtime writes.")
     }
 }

@@ -74,6 +74,7 @@ struct AgentSession: Identifiable {
     }
 
     var priority: Int {
+        if isStale { return 3 }
         switch state {
         case "blocked", "waiting": return 0
         case "working": return 1
@@ -119,6 +120,7 @@ final class IslandStore: ObservableObject {
     @Published var measuredBodyHeight: CGFloat = 44
     @Published private(set) var syncUnavailable = false
     @Published private(set) var syncFailure: String?
+    private(set) var unavailableHostIDs: Set<String> = []
     @Published private(set) var lastSyncedAt: Date?
     @Published private(set) var usingEventBridge = false
     private(set) var lastBridgeAt: Date?
@@ -190,7 +192,8 @@ final class IslandStore: ObservableObject {
     }
 
     func replaceFromPoll(_ events: [IslandEvent], snapshotStartedAt: Date? = nil,
-                         livePaneKeys: Set<String>? = nil) {
+                         livePaneKeys: Set<String>? = nil,
+                         unavailableHostIDs: Set<String> = []) {
         let observedIDs = Set(events.map(eventIdentity))
         hiddenByID = hiddenByID.filter { observedIDs.contains($0.key) }
         var snapshot: [String: AgentSession] = [:]
@@ -231,14 +234,25 @@ final class IslandStore: ObservableObject {
         sessions = snapshot
         eventArrivalByID = eventArrivalByID.filter { snapshot[$0.key] != nil }
         lastSyncedAt = Date()
-        syncUnavailable = sessions.values.contains { $0.isStale }
-        syncFailure = syncUnavailable ? "remote_unreachable" : nil
+        self.unavailableHostIDs = unavailableHostIDs
+        if unavailableHostIDs.contains("local") {
+            syncUnavailable = true
+            syncFailure = "orca_snapshot_failed"
+        } else {
+            // An unused offline remote environment has no stale rows and must not raise a false alarm.
+            syncUnavailable = sessions.values.contains { $0.isStale }
+            syncFailure = syncUnavailable ? "remote_unreachable" : nil
+        }
         acknowledgeUpdates(completions: completions)
     }
 
     func markSyncUnavailable(reason: String? = nil) {
         syncUnavailable = true
         if let reason { syncFailure = reason } else if syncFailure == nil { syncFailure = "orca_snapshot_failed" }
+    }
+
+    var staleEnvironmentNames: [String] {
+        Array(Set(sessions.values.filter(\.isStale).map { $0.environmentName ?? "远程环境" })).sorted()
     }
 
     /// Short, user-facing explanation of `syncFailure`.
@@ -248,7 +262,11 @@ final class IslandStore: ObservableObject {
         case "orca_api_incompatible": return "Orca 已更新，接口不兼容，请更新 Orca Island"
         case "orca_runtime_unreachable": return "Orca 未运行或无响应"
         case "helper_failed": return "读取 Orca 状态超时或失败"
-        case "remote_unreachable": return "部分远程环境未连接 · 显示上次状态"
+        case "remote_unreachable":
+            let names = staleEnvironmentNames
+            return names.isEmpty
+                ? "部分远程环境未连接 · 显示上次状态"
+                : "\(names.joined(separator: "、")) 未连接 · 显示上次状态"
         default: return "读取 Orca 状态失败"
         }
     }
@@ -270,6 +288,7 @@ final class IslandStore: ObservableObject {
          "sessionCount": sessions.count, "syncUnavailable": syncUnavailable,
          "syncFailure": (syncUnavailable ? syncFailure : nil) as Any? ?? NSNull(),
          "syncFailureDescription": syncFailureDescription as Any? ?? NSNull(),
+         "unavailableHosts": Array(unavailableHostIDs).sorted(),
          "lastBridgeAt": lastBridgeAt.map { $0.timeIntervalSince1970 * 1000 } as Any? ?? NSNull(),
          "lastReconciledAt": lastSyncedAt.map { $0.timeIntervalSince1970 * 1000 } as Any? ?? NSNull()]
             .merging(["sessions": sortedSessions.map { session -> [String: Any] in

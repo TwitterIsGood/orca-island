@@ -145,7 +145,8 @@ enum EventSyncTests {
             expect(Thread.isMainThread, "Mode changes are delivered on the main thread")
             modeChanges.append(mode)
         }, readSnapshot: { startedAt in
-            OrcaPollSnapshot(events: [], livePaneKeys: ["fixture:one"], startedAt: startedAt)
+            OrcaPollSnapshot(events: [], livePaneKeys: ["fixture:one"], startedAt: startedAt,
+                             unavailableHostIDs: ["runtime:offline-vpn"])
         })
         poller.start()
         pumpUntil { snapshots.count == 1 }

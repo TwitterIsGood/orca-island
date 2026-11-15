@@ -124,7 +124,10 @@ final class OrcaStatusPoller {
                 if let reason, let onFailure = self.onFailure {
                     self.deliver(generation: deliveryToken) { onFailure(reason) }
                 }
-                self.schedule.finishPoll(at: self.clock(), succeeded: snapshot != nil && snapshot!.unavailableHostIDs.isEmpty)
+                // An offline remote environment is normal when off VPN; keep the calm reconciliation
+                // cadence whenever the local Orca runtime succeeded instead of retrying every 5s.
+                self.schedule.finishPoll(at: self.clock(),
+                                         succeeded: snapshot != nil && !snapshot!.unavailableHostIDs.contains("local"))
                 let annotated = snapshot.map {
                     OrcaPollSnapshot(events: $0.events, livePaneKeys: $0.livePaneKeys,
                                      startedAt: $0.startedAt, mode: self.schedule.mode,

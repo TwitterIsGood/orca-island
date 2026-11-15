@@ -17,14 +17,20 @@ struct OverlayView: View {
     @ObservedObject var store: IslandStore
 
     private var geometry: NotchGeometry { store.notchGeometry }
-    private var workingCount: Int { store.sessions.values.filter { $0.state == "working" }.count }
+    private var liveSessions: [AgentSession] { store.sessions.values.filter { !$0.isStale } }
+    private var workingCount: Int { liveSessions.filter { $0.state == "working" }.count }
     private var attentionCount: Int {
-        store.sessions.values.filter { $0.state == "waiting" || $0.state == "blocked" }.count
+        liveSessions.filter { $0.state == "waiting" || $0.state == "blocked" }.count
+    }
+    private var notchShowsSyncWarning: Bool {
+        guard store.syncUnavailable else { return false }
+        // Retained stale rows on one offline remote host must not hide live sessions on the notch.
+        return store.syncFailure != "remote_unreachable" || liveSessions.isEmpty
     }
     private var statusColor: Color {
-        if store.syncUnavailable { return .orange }
+        if notchShowsSyncWarning { return .orange }
         if attentionCount > 0 { return .orange }
-        return workingCount > 0 ? .cyan : (store.sessions.isEmpty ? .gray : .green)
+        return workingCount > 0 ? .cyan : (liveSessions.isEmpty ? .gray : .green)
     }
 
     var body: some View {
@@ -95,7 +101,7 @@ struct OverlayView: View {
                 .accessibilityHidden(true)
 
             HStack(spacing: 6) {
-                Image(systemName: store.syncUnavailable ? "wifi.exclamationmark" :
+                Image(systemName: notchShowsSyncWarning ? "wifi.exclamationmark" :
                       attentionCount > 0 ? "exclamationmark.circle.fill" :
                       workingCount > 0 ? "circle.dotted" : "checkmark.circle")
                     .foregroundStyle(statusColor)
