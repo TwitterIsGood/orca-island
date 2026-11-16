@@ -22,12 +22,30 @@ function resolveListEnvironments(cli) {
   return () => []
 }
 
+// Orca 1.4.259 split cli/runtime-client.js into cli/runtime/{client,metadata}.js and moved
+// profile-state-location.js under cli/profiles/. Probe old and new locations per export.
+function resolveExport(cli, name, files) {
+  let lastError
+  for (const file of files) {
+    try {
+      const value = require(path.join(cli, file))[name]
+      if (typeof value === 'function') return value
+    } catch (error) { lastError = error }
+  }
+  const error = new Error(`${name} is not a function`)
+  error.code = lastError?.code ?? 'MODULE_NOT_FOUND'
+  throw error
+}
+
 async function main() {
   const contents = path.dirname(path.dirname(process.execPath))
   const cli = path.join(contents, 'Resources/app.asar.unpacked/out/cli')
-  const { RuntimeClient, getDefaultUserDataPath } = require(path.join(cli, 'runtime-client.js'))
+  const RuntimeClient = resolveExport(cli, 'RuntimeClient', ['runtime-client.js', 'runtime/client.js'])
+  const getDefaultUserDataPath = resolveExport(cli, 'getDefaultUserDataPath',
+    ['runtime-client.js', 'runtime/metadata.js'])
   const listEnvironments = resolveListEnvironments(cli)
-  const { getActiveProfileStateLocation } = require(path.join(cli, 'profile-state-location.js'))
+  const getActiveProfileStateLocation = resolveExport(cli, 'getActiveProfileStateLocation',
+    ['profile-state-location.js', 'profiles/profile-state-location.js'])
   const userData = getDefaultUserDataPath()
   const local = new RuntimeClient(userData, 5000, null, null)
   const environments = listEnvironments(userData)
