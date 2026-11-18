@@ -38,7 +38,7 @@ jobs:
       - name: Run checks
         run: |
           bash -n scripts/*.sh tests/*.sh
-          node --test tests/*.test.mjs
+          node --test tests/*.test.mjs tests/*.test.cjs
           ./tests/check-native.sh
           ./tests/check-input.sh
           ./tests/check-outside-click.sh
@@ -49,6 +49,8 @@ jobs:
           ./tests/check-event-sync.sh
           ./tests/check-bridge.sh
           ./tests/check-http.sh
+          ./tests/check-public-cli.sh
+          ./tests/check-island-ack.sh
       - name: Configure optional Developer ID signing
         env:
           CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}

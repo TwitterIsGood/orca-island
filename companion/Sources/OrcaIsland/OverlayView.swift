@@ -82,6 +82,9 @@ struct OverlayView: View {
                 store.measuredBodyHeight = rounded
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: IslandNavigationFailure.notification)) { notification in
+            store.navigationFailure = notification.userInfo?["message"] as? String
+        }
     }
 
     private var notchBar: some View {
@@ -128,9 +131,23 @@ struct OverlayView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.orange)
             }
-            Text("\(store.workspaceGroups.count) 个工作区 · \(store.sessions.count) 个对话")
-                .font(.system(size: 10))
-                .foregroundStyle(.white.opacity(0.45))
+            if let failure = store.navigationFailure {
+                Text(failure)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.orange)
+            }
+            HStack {
+                Text("\(store.workspaceGroups.count) 个工作区 · \(store.sessions.count) 个对话")
+                    .foregroundStyle(.white.opacity(0.45))
+                Spacer(minLength: 0)
+                if store.completedCount > 0 {
+                    Button("清除已完成") { store.markAllCompletedAsRead() }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.green)
+                        .help("仅在 Orca Island 标为已读，不改变 Orca 的未读状态")
+                }
+            }
+            .font(.system(size: 10))
 
             if store.sessions.isEmpty {
                 Text("等待 Orca 会话")
@@ -179,24 +196,35 @@ struct OverlayView: View {
 
     private func sessionRow(_ session: AgentSession) -> some View {
         Button {
-            TerminalSwitcher.switchTo(session)
+            store.navigationFailure = nil
+            if session.state == "done" { store.markAsRead(session) }
+            if session.canNavigate { TerminalSwitcher.switchTo(session) }
         } label: {
             HStack(alignment: .top, spacing: 8) {
                 Circle()
                     .fill(session.isStale ? .gray : session.tint)
                     .frame(width: 6, height: 6)
                     .padding(.top, 5)
-                Text(session.title)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.white.opacity(0.65))
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(session.title)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.white.opacity(0.65))
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let reason = session.navigationUnavailableReason {
+                        Text(reason + (session.state == "done" ? " · 点击标为已读" : ""))
+                            .font(.system(size: 9))
+                            .foregroundStyle(.white.opacity(0.4))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 Text(session.isStale ? "暂未连接" : session.displayState)
                     .font(.system(size: 10))
                     .foregroundStyle(session.isStale ? .gray : session.tint)
                     .padding(.top, 2)
-                Image(systemName: "arrow.up.forward")
+                Image(systemName: session.canNavigate ? "arrow.up.forward" :
+                        session.state == "done" ? "checkmark.circle" : "minus.circle")
                     .font(.system(size: 10))
                     .foregroundStyle(.white.opacity(0.35))
                     .padding(.top, 3)
@@ -206,13 +234,18 @@ struct OverlayView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .disabled(!session.canNavigate && session.state != "done")
         .background {
             if session.id == store.recentCompletionID {
                 RoundedRectangle(cornerRadius: 6).fill(.green.opacity(0.12))
             }
         }
         .id(session.id)
-        .help("\(session.title)\n\(session.workspaceName) · \(session.displayState)")
-        .accessibilityLabel("\(session.workspaceName)，\(session.title)，\(session.displayState)")
+        .help("\(session.title)\n\(session.workspaceName) · \(session.displayState)\n" +
+              (session.navigationUnavailableReason ?? "点击前重新核验活动终端位置") +
+              (session.state == "done" ? "\n点击即在 Island 标为已读；不改变 Orca 未读状态" : ""))
+        .accessibilityLabel("\(session.workspaceName)，\(session.title)，\(session.displayState)，" +
+                            (session.state == "done" ? "点击在 Island 标为已读。" : "") +
+                            (session.navigationUnavailableReason ?? "跳转终端"))
     }
 }

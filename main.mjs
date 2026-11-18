@@ -1,4 +1,5 @@
 import { createCompanionManager } from './lib/companion-manager.mjs'
+import { createPublicWorkspaces } from './lib/public-workspaces.mjs'
 
 const DEFAULT_ENDPOINT = 'http://127.0.0.1:17777/events'
 const MAX_PENDING = 20
@@ -14,7 +15,8 @@ function eventState(payload) {
 }
 
 function eventKey(payload) {
-  return `${payload?.workspaceId ?? 'unknown'}:${payload?.paneKey ?? 'unknown'}`
+  return JSON.stringify([payload?.hostId ?? null, payload?.workspaceListId ?? payload?.workspaceId ?? null,
+    payload?.paneKey ?? null])
 }
 
 async function postJson(endpoint, payload, timeoutMs = REQUEST_TIMEOUT_MS) {
@@ -146,10 +148,19 @@ export function createRelay({
       const mainState = payload?.mainAgent?.state ?? null
       const terminalTitle = payload?.title ?? payload?.terminalTitle ?? null
       const terminalId = payload?.terminalId ?? null
-      const fingerprint = JSON.stringify([state, mainState, terminalTitle, terminalId])
+      const stateStartedAt = payload?.stateStartedAt ?? payload?.mainAgent?.stateStartedAt ?? null
+      const fingerprint = JSON.stringify([state, mainState, terminalTitle, terminalId,
+        stateStartedAt, payload?.mainAgent?.stateStartedAt ?? null, payload?.mainAgent?.outcome ?? null,
+        payload?.workspaceId ?? null, payload?.workspaceLabel ?? null])
       const normalized = {
         type: 'orca.agent.status',
         workspaceId: payload?.workspaceId ?? null,
+        workspaceListId: payload?.workspaceListId ?? null,
+        hostId: payload?.hostId ?? null,
+        environmentId: payload?.environmentId ?? null,
+        environmentName: payload?.environmentName ?? null,
+        workspaceLabel: payload?.workspaceLabel ?? null,
+        stateStartedAt,
         paneKey: payload?.paneKey ?? null,
         terminalTitle,
         terminalId,
@@ -195,6 +206,11 @@ export function createRelay({
       return queueControl({
         type: `orca.workspace.${kind}`,
         workspaceId: payload.workspaceId,
+        workspaceListId: payload.workspaceListId ?? null,
+        hostId: payload.hostId ?? null,
+        environmentId: payload.environmentId ?? null,
+        environmentName: payload.environmentName ?? null,
+        workspaceLabel: payload.workspaceLabel ?? null,
         receivedAt: payload.receivedAt ?? now()
       })
     },
@@ -220,19 +236,26 @@ export function createRelay({
 export default function activate(orca, {
   companionManager = createCompanionManager({ log: (line) => orca.log(line) }),
   relay = createRelay({ log: (line) => orca.log(line) }),
-  watchdogOptions = {}
+  watchdogOptions = {},
+  workspaces = createPublicWorkspaces({ orca, log: (line) => orca.log(line) })
 } = {}) {
+  workspaces.refresh()
 
   // Orca kills workers that keep too many events unacknowledged. Queue delivery
   // and return immediately from the event handler.
   orca.events.on('agent.status.changed', (payload) => {
-    relay.handle(payload)
+    relay.handle(workspaces.enrich(payload))
   })
   for (const kind of ['created', 'removed']) {
     orca.events.on(`workspace.${kind}`, (payload) => {
-      relay.workspaceChanged(kind, payload)
+      relay.workspaceChanged(kind, workspaces.enrich(payload))
+      workspaces.refresh({ afterPending: true })
     })
   }
+
+  orca.events.on('workspace.changed', () => {
+    workspaces.refresh({ afterPending: true })
+  })
 
   orca.commands.register('orca-island.send-test', () => relay.sendTest())
 
@@ -288,7 +311,7 @@ export default function activate(orca, {
     ...watchdogOptions
   })
   watchdog.start()
-  return { watchdog }
+  return { watchdog, workspaces }
 }
 
 const STATUS_URL = 'http://127.0.0.1:17777/status'

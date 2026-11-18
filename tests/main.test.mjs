@@ -31,6 +31,12 @@ test('deduplicates repeated agent states and forwards the normalized event', asy
     {
       type: 'orca.agent.status',
       workspaceId: 'workspace-1',
+      workspaceListId: null,
+      hostId: null,
+      environmentId: null,
+      environmentName: null,
+      workspaceLabel: null,
+      stateStartedAt: 120,
       paneKey: 'tab-1:leaf-1',
       terminalTitle: null,
       terminalId: null,
@@ -388,8 +394,10 @@ test('sends a protocol handshake and retains workspace lifecycle order', async (
   await relay.idle()
   assert.deepEqual(sent, [
     { type: 'orca.bridge.hello', protocol: 1, sentAt: 10, pluginApi: { major: 1, minor: 2 } },
-    { type: 'orca.workspace.created', workspaceId: 'workspace-1', receivedAt: 20 },
-    { type: 'orca.workspace.removed', workspaceId: 'workspace-1', receivedAt: 30 }
+    { type: 'orca.workspace.created', workspaceId: 'workspace-1', workspaceListId: null, hostId: null,
+      environmentId: null, environmentName: null, workspaceLabel: null, receivedAt: 20 },
+    { type: 'orca.workspace.removed', workspaceId: 'workspace-1', workspaceListId: null, hostId: null,
+      environmentId: null, environmentName: null, workspaceLabel: null, receivedAt: 30 }
   ])
 })
 
@@ -408,7 +416,7 @@ test('activation does not block hooks or commands and handshakes after the compa
     relay,
     companionManager: { ensure(options) { ensureCalls.push(options); return ready.promise } }
   })
-  assert.deepEqual([...events.keys()], ['agent.status.changed', 'workspace.created', 'workspace.removed'])
+  assert.deepEqual([...events.keys()], ['agent.status.changed', 'workspace.created', 'workspace.removed', 'workspace.changed'])
   assert.equal(events.get('agent.status.changed')(event('working', 1)), undefined)
   assert.equal(commands.get('orca-island.install-start')().status, 'preparing')
   await new Promise(setImmediate)

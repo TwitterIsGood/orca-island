@@ -26,6 +26,7 @@ struct IslandEvent: Codable {
     var stateStartedAt: Double? = nil
     var isStale: Bool? = nil
     var isHidden: Bool? = nil
+    var workspaceListId: String? = nil
 }
 
 struct AgentSession: Identifiable {
@@ -46,6 +47,26 @@ struct AgentSession: Identifiable {
     var terminalId: String? = nil
     var structuredSessionId: String? = nil
     var isStale: Bool = false
+    var stateStartedAt: Double? = nil
+    var workspaceListId: String? = nil
+
+    var navigationUnavailableReason: String? {
+        if isStale { return "暂未连接，不能跳转" }
+        if structuredSessionId != nil { return "原生聊天暂不支持跳转" }
+        guard let terminalId, !terminalId.isEmpty else { return "休眠或无活动终端，不能跳转" }
+        guard let paneKey, !paneKey.isEmpty, let workspaceId, !workspaceId.isEmpty else {
+            return "缺少精确终端位置，不能跳转"
+        }
+        if hostId != "local" {
+            guard hostId.hasPrefix("runtime:"), let environmentId,
+                  hostId == "runtime:\(environmentId)", !environmentId.isEmpty else {
+                return "此执行主机暂不支持跳转"
+            }
+        }
+        return nil
+    }
+
+    var canNavigate: Bool { navigationUnavailableReason == nil }
 
     static func identity(hostId: String, paneKey: String) -> String {
         // Length prefixes keep arbitrary host and pane identifiers collision-free.
@@ -111,6 +132,29 @@ struct WorkspaceGroup: Identifiable {
     var priority: Int { sessions.map(\.priority).min() ?? 2 }
 }
 
+/// Island owns this small ledger; it never reads or changes Orca's unread state.
+protocol IslandAcknowledgementStorage {
+    func load() -> [String: Double]
+    func save(_ turns: [String: Double])
+}
+
+final class MemoryIslandAcknowledgementStorage: IslandAcknowledgementStorage {
+    private var turns: [String: Double] = [:]
+    func load() -> [String: Double] { turns }
+    func save(_ turns: [String: Double]) { self.turns = turns }
+}
+
+struct UserDefaultsIslandAcknowledgementStorage: IslandAcknowledgementStorage {
+    let defaults: UserDefaults
+    var key = "dev.orca.island.acknowledgedCompletionTurns.v1"
+    func load() -> [String: Double] { defaults.dictionary(forKey: key) as? [String: Double] ?? [:] }
+    func save(_ turns: [String: Double]) { defaults.set(turns, forKey: key) }
+}
+
+enum IslandNavigationFailure {
+    static let notification = Notification.Name("dev.orca.island.navigationFailure")
+}
+
 @MainActor
 final class IslandStore: ObservableObject {
     @Published private(set) var sessions: [String: AgentSession] = [:]
@@ -120,6 +164,7 @@ final class IslandStore: ObservableObject {
     @Published var measuredBodyHeight: CGFloat = 44
     @Published private(set) var syncUnavailable = false
     @Published private(set) var syncFailure: String?
+    @Published var navigationFailure: String?
     private(set) var unavailableHostIDs: Set<String> = []
     @Published private(set) var lastSyncedAt: Date?
     @Published private(set) var usingEventBridge = false
@@ -128,6 +173,39 @@ final class IslandStore: ObservableObject {
     private(set) var pollCount = 0
     private var eventArrivalByID: [String: Date] = [:]
     private var hiddenByID: [String: IslandEvent] = [:]
+    private let acknowledgementStorage: IslandAcknowledgementStorage
+    private var acknowledgedTurns: [String: Double]
+
+    init(acknowledgementStorage: IslandAcknowledgementStorage = MemoryIslandAcknowledgementStorage()) {
+        self.acknowledgementStorage = acknowledgementStorage
+        acknowledgedTurns = acknowledgementStorage.load().filter { $0.value.isFinite }
+    }
+
+    var completedCount: Int { sessions.values.filter { $0.state == "done" }.count }
+
+    func markAsRead(_ session: AgentSession) {
+        if acknowledgeCompletion(session) { acknowledgementStorage.save(acknowledgedTurns) }
+    }
+
+    func markAllCompletedAsRead() {
+        var changed = false
+        for session in Array(sessions.values) where session.state == "done" {
+            if acknowledgeCompletion(session) { changed = true }
+        }
+        if changed { acknowledgementStorage.save(acknowledgedTurns) }
+    }
+
+    private func acknowledgeCompletion(_ session: AgentSession) -> Bool {
+        guard let current = sessions[session.id], current.state == "done",
+              session.state == "done", completionTurn(current) == completionTurn(session) else { return false }
+        let turn = completionTurn(current)
+        acknowledgedTurns[current.id] = max(acknowledgedTurns[current.id] ?? -.infinity, turn)
+        hiddenByID[current.id] = event(from: current)
+        sessions.removeValue(forKey: current.id)
+        eventArrivalByID.removeValue(forKey: current.id)
+        if recentCompletionID == current.id { recentCompletionID = nil }
+        return true
+    }
 
     var visibleBodyHeight: CGFloat {
         min(max(44, measuredBodyHeight), notchGeometry.maximumBodyHeight)
@@ -158,23 +236,14 @@ final class IslandStore: ObservableObject {
 
     @discardableResult
     func ingest(_ original: IslandEvent, arrivedAt: Date = Date()) -> Bool {
-        var event = original
-        if event.hostId == nil && event.type == "orca.agent.status" {
-            let candidates = sessions.values.filter {
-                $0.paneKey == event.paneKey && (event.workspaceId == nil || $0.workspaceId == event.workspaceId)
-            }
-            let hidden = hiddenByID.values.filter {
-                $0.paneKey == event.paneKey && (event.workspaceId == nil || $0.workspaceId == event.workspaceId)
-            }
-            let hosts = Set(candidates.map(\.hostId) + hidden.map { $0.hostId ?? "local" })
-            guard hosts.count == 1, let host = hosts.first else { return false }
-            // The plugin stamps receipt on this desktop; remote authorities have their own clock.
-            // Reconcile remote events from their source instead of comparing unrelated clocks.
-            guard host == "local" else { return false }
-            event.hostId = host
-        }
+        let event = original
+        // Official remote events carry desktop receipt time, not the source's
+        // monotonic turn evidence. They are refresh hints, never remote authority.
+        // A hostless hook cannot be assigned by a currently unique raw path or
+        // pane: an undiscovered remote may own exactly the same identifiers.
+        if event.type == "orca.agent.status", event.hostId != "local" { return false }
         let id = eventIdentity(event)
-        if let hidden = hiddenByID[id] {
+        if let hidden = hiddenByID[id], acknowledgedTurns[id] == nil {
             let incoming = event.combinedState ?? event.state ?? event.mainAgent?.state
             // Repeated done pings after acknowledgment must never resurrect a completed turn.
             guard incoming != "done", incoming != "idle",
@@ -182,7 +251,13 @@ final class IslandStore: ObservableObject {
             hiddenByID.removeValue(forKey: id)
         }
         let previous = previousSession(for: event, in: sessions)
+            ?? hiddenByID[id].map { makeSession(from: $0, previous: nil) }
         let session = makeSession(from: event, previous: previous)
+        if isAcknowledged(session) {
+            hiddenByID[id] = self.event(from: session)
+            return true
+        }
+        hiddenByID.removeValue(forKey: id)
         sessions[session.id] = session
         if previous == nil || session.receivedAt > previous!.receivedAt {
             eventArrivalByID[session.id] = arrivedAt
@@ -209,10 +284,16 @@ final class IslandStore: ObservableObject {
                 explicitlyHidden.insert(id)
                 continue
             }
-            hiddenByID.removeValue(forKey: id)
             let previous = previousSession(for: event, in: snapshot)
                 ?? previousSession(for: event, in: sessions)
+                ?? hiddenByID[id].map { makeSession(from: $0, previous: nil) }
             let session = makeSession(from: event, previous: previous)
+            if isAcknowledged(session) {
+                hiddenByID[id] = self.event(from: session)
+                explicitlyHidden.insert(id)
+                continue
+            }
+            hiddenByID.removeValue(forKey: id)
             snapshot[session.id] = session
         }
 
@@ -220,6 +301,15 @@ final class IslandStore: ObservableObject {
         // an event received after its terminal inventory was requested.
         for (id, previous) in sessions where snapshot[id] == nil {
             if explicitlyHidden.contains(id) { continue }
+            // The reader only caches its last CLI inventory. A newer bridge
+            // row may not be in that cache yet; failed/truncated host coverage
+            // is never evidence that its pane was removed.
+            if unavailableHostIDs.contains(previous.hostId) {
+                var retained = previous
+                retained.isStale = true
+                snapshot[id] = retained
+                continue
+            }
             let stillLive = livePaneKeys?.contains(id) == true
                 || (previous.hostId == "local" && previous.paneKey.map { livePaneKeys?.contains($0) == true } == true)
             let arrivedDuringPoll = snapshotStartedAt.map { start in
@@ -286,6 +376,7 @@ final class IslandStore: ObservableObject {
          "reconciliationSeconds": usingEventBridge ? 45 : 2,
          "pollCount": pollCount, "pushedStatusCount": pushedStatusCount,
          "sessionCount": sessions.count, "syncUnavailable": syncUnavailable,
+         "readStateOwner": "island", "acknowledgedCompletionCount": acknowledgedTurns.count,
          "syncFailure": (syncUnavailable ? syncFailure : nil) as Any? ?? NSNull(),
          "syncFailureDescription": syncFailureDescription as Any? ?? NSNull(),
          "unavailableHosts": Array(unavailableHostIDs).sorted(),
@@ -314,6 +405,26 @@ final class IslandStore: ObservableObject {
         return value
     }
 
+    private func completionTurn(_ session: AgentSession) -> Double {
+        session.stateStartedAt ?? session.receivedAt.timeIntervalSince1970 * 1000
+    }
+
+    private func isAcknowledged(_ session: AgentSession) -> Bool {
+        session.state == "done" && acknowledgedTurns[session.id].map { completionTurn(session) <= $0 } == true
+    }
+
+    private func event(from session: AgentSession) -> IslandEvent {
+        IslandEvent(type: "orca.snapshot", workspaceId: session.workspaceId, paneKey: session.paneKey,
+                    state: session.state, combinedState: session.combinedState, mainAgent: nil,
+                    receivedAt: session.receivedAt.timeIntervalSince1970 * 1000,
+                    terminalTitle: session.terminalTitle, terminalId: session.terminalId,
+                    hostId: session.hostId, environmentId: session.environmentId,
+                    environmentName: session.environmentName, workspaceLabel: session.workspaceLabel,
+                    tabId: session.tabId, leafId: session.leafId, structuredSessionId: session.structuredSessionId,
+                    stateStartedAt: session.stateStartedAt, isStale: session.isStale,
+                    workspaceListId: session.workspaceListId)
+    }
+
     private func makeSession(from event: IslandEvent, previous: AgentSession?) -> AgentSession {
         let workspaceId = nonempty(event.workspaceId) ?? previous?.workspaceId
         let paneKey = nonempty(event.paneKey) ?? previous?.paneKey
@@ -328,6 +439,14 @@ final class IslandStore: ObservableObject {
         let projectsSameTimestamp = event.type == "orca.snapshot" && previous?.receivedAt == eventTime
         let state = isNewer || projectsSameTimestamp ? incomingState : (previous?.state ?? incomingState)
         let receivedAt = isNewer ? eventTime : (previous?.receivedAt ?? eventTime)
+        let stateStartedAt: Double?
+        if isNewer || projectsSameTimestamp {
+            stateStartedAt = event.stateStartedAt ?? event.mainAgent?.stateStartedAt
+                ?? (state == previous?.state ? previous?.stateStartedAt : nil)
+                ?? receivedAt.timeIntervalSince1970 * 1000
+        } else {
+            stateStartedAt = previous?.stateStartedAt
+        }
         return AgentSession(
             id: key,
             workspaceId: workspaceId,
@@ -343,11 +462,16 @@ final class IslandStore: ObservableObject {
             environmentId: event.environmentId ?? previous?.environmentId,
             environmentName: event.environmentName ?? previous?.environmentName,
             workspaceLabel: event.workspaceLabel ?? previous?.workspaceLabel,
-            tabId: event.tabId ?? previous?.tabId,
-            leafId: event.leafId ?? previous?.leafId,
-            terminalId: event.terminalId ?? previous?.terminalId,
-            structuredSessionId: event.structuredSessionId ?? previous?.structuredSessionId,
-            isStale: event.isStale ?? previous?.isStale ?? false
+            tabId: event.type == "orca.snapshot" ? event.tabId : (event.tabId ?? previous?.tabId),
+            leafId: event.type == "orca.snapshot" ? event.leafId : (event.leafId ?? previous?.leafId),
+            // Public snapshots own liveness. A disappeared handle must not keep
+            // a previously clickable terminal alive through metadata fallback.
+            terminalId: event.type == "orca.agent.status" ? previous?.terminalId :
+                (event.type == "orca.snapshot" ? event.terminalId : (event.terminalId ?? previous?.terminalId)),
+            structuredSessionId: event.type == "orca.snapshot" ? event.structuredSessionId : (event.structuredSessionId ?? previous?.structuredSessionId),
+            isStale: event.isStale ?? previous?.isStale ?? false,
+            stateStartedAt: stateStartedAt,
+            workspaceListId: event.workspaceListId ?? previous?.workspaceListId
         )
     }
 

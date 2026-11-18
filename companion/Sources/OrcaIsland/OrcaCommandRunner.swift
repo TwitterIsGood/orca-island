@@ -26,21 +26,7 @@ enum OrcaCommandRunner {
         return execute(executable, arguments: arguments, timeout: timeout)
     }
 
-    static func runHelper(_ arguments: [String], timeout: TimeInterval = 12) -> Data? {
-        guard let cli = executableURL()?.resolvingSymlinksInPath() else { return nil }
-        let contents = cli.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let electron = contents.appendingPathComponent("MacOS/Orca")
-        let candidates = [Bundle.main.resourceURL?.appendingPathComponent("orca-snapshot.cjs"),
-                          URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-                            .deletingLastPathComponent().deletingLastPathComponent()
-                            .deletingLastPathComponent().appendingPathComponent("scripts/orca-snapshot.cjs")]
-        guard FileManager.default.isExecutableFile(atPath: electron.path),
-              let helper = candidates.compactMap({ $0 }).first(where: { FileManager.default.fileExists(atPath: $0.path) }) else { return nil }
-        return execute(electron, arguments: [helper.path] + arguments, timeout: timeout, nodeMode: true)
-    }
-
-    private static func execute(_ executable: URL, arguments: [String], timeout: TimeInterval,
-                                nodeMode: Bool = false) -> Data? {
+    private static func execute(_ executable: URL, arguments: [String], timeout: TimeInterval) -> Data? {
         let process = Process()
         let output = Pipe()
         let errors = Pipe()
@@ -52,15 +38,7 @@ enum OrcaCommandRunner {
         process.standardError = errors
         process.terminationHandler = { _ in exited.signal() }
 
-        // A GUI launch has a minimal PATH; the Orca shell launcher still needs bash.
-        var environment = ProcessInfo.processInfo.environment
-        // Never inherit this task's terminal/workspace/remote selectors into a desktop-wide read.
-        environment = environment.filter { !$0.key.hasPrefix("ORCA_") }
-        environment.removeValue(forKey: "NODE_OPTIONS")
-        environment.removeValue(forKey: "NODE_REPL_EXTERNAL_MODULE")
-        if nodeMode { environment["ELECTRON_RUN_AS_NODE"] = "1" }
-        environment["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin:" + (environment["PATH"] ?? "")
-        process.environment = environment
+        process.environment = commandEnvironment()
 
         let handles = [output.fileHandleForReading, errors.fileHandleForReading]
         defer {
@@ -108,6 +86,17 @@ enum OrcaCommandRunner {
         drain(errors.fileHandleForReading, into: &discardedErrors, limit: 0, truncated: &errorsTruncated)
         guard process.terminationStatus == 0, !truncated else { return nil }
         return data
+    }
+
+    static func commandEnvironment(_ source: [String: String] = ProcessInfo.processInfo.environment) -> [String: String] {
+        // Desktop-wide inventory must never inherit an agent's workspace, terminal,
+        // profile or remote selector. The public launcher owns its interpreter setup.
+        var environment = source.filter { !$0.key.hasPrefix("ORCA_") }
+        for key in ["NODE_OPTIONS", "NODE_REPL_EXTERNAL_MODULE", "ELECTRON_RUN_AS_NODE"] {
+            environment.removeValue(forKey: key)
+        }
+        environment["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin:" + (environment["PATH"] ?? "")
+        return environment
     }
 
     private static func drain(_ handle: FileHandle, into data: inout Data, limit: Int, truncated: inout Bool) {

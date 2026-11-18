@@ -7,6 +7,6 @@ swiftc companion/Sources/OrcaIsland/NotchGeometry.swift \
   companion/Sources/OrcaIsland/PollSchedule.swift \
   companion/Sources/OrcaIsland/OrcaStatusPoller.swift \
   companion/Sources/OrcaIsland/OrcaSnapshotReader.swift \
+  companion/Sources/OrcaIsland/OrcaPublicCLI.swift \
   tests/FleetSyncTests.swift -o .validation/fleet-sync-tests
 .validation/fleet-sync-tests
-node --test tests/orca-projection.test.cjs

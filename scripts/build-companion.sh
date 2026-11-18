@@ -43,7 +43,8 @@ EXECUTABLE="$APP/Contents/MacOS/OrcaIsland"
 if [[ ${#BINARIES[@]} -eq 2 ]]; then xcrun lipo -create "${BINARIES[@]}" -output "$EXECUTABLE"; else cp "${BINARIES[0]}" "$EXECUTABLE"; fi
 rm -f "${BINARIES[@]}"
 chmod +x "$EXECUTABLE"
-cp "$ROOT/scripts/orca-snapshot.cjs" "$ROOT/scripts/orca-projection.cjs" "$APP/Contents/Resources/"
+# State collection is implemented in Swift through the public Orca CLI.
+# The companion ships no scripts that import Orca's private modules.
 for BUILD_ARCH in "${ARCHITECTURES[@]}"; do xcrun lipo "$EXECUTABLE" -verify_arch "$BUILD_ARCH"; done
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

@@ -1,7 +1,7 @@
 import Foundation
 
 enum OrcaCommandRunner {
-    static func runHelper(_ arguments: [String]) -> Data? { preconditionFailure("No live runtime in fixtures") }
+    static func run(_ arguments: [String], timeout: TimeInterval = 3) -> Data? { preconditionFailure("No live runtime in fixtures") }
 }
 
 @main
@@ -34,12 +34,12 @@ enum FleetSyncTests {
         ack.replaceFromPoll([event("done", time: 2000)])
         ack.replaceFromPoll([event("idle", time: 2000, hidden: true)], livePaneKeys: ["tab:leaf"])
         expect(ack.sessions.isEmpty, "Explicit acknowledgment cannot be undone by broad live-pane retention")
-        plugin = event("done", time: 3000, type: "orca.agent.status"); plugin.hostId = nil
+        plugin = event("done", time: 3000, type: "orca.agent.status"); plugin.hostId = "local"
         expect(ack.ingest(plugin) && ack.sessions.isEmpty, "Repeated done after ack stays hidden")
-        plugin = event("working", time: 1000, type: "orca.agent.status"); plugin.hostId = nil
+        plugin = event("working", time: 1000, type: "orca.agent.status"); plugin.hostId = "local"
         _ = ack.ingest(plugin)
         expect(ack.sessions.isEmpty, "An old working event cannot revive acknowledged history")
-        plugin = event("working", time: 4000, type: "orca.agent.status"); plugin.hostId = nil; _ = ack.ingest(plugin)
+        plugin = event("working", time: 4000, type: "orca.agent.status"); plugin.hostId = "local"; _ = ack.ingest(plugin)
         expect(ack.sessions.values.first?.state == "working", "A genuinely later working event starts a new turn")
         ack.replaceFromPoll([event("done", time: 3000)])
         expect(ack.sessions.values.first?.state == "working", "Older snapshot cannot finish new work")
@@ -76,10 +76,13 @@ enum FleetSyncTests {
         expect(recovered.events.isEmpty && recovered.livePaneKeys.isEmpty, "Only a successful empty remote snapshot confirms removal")
         let cold = OrcaSnapshotReader().reconcile(response([event("working")], [], available: false), startedAt: start)!
         expect(!cold.unavailableHostIDs.isEmpty, "A cold-start remote failure is still tracked in snapshot diagnostics")
-        fleetStore.replaceFromPoll(cold.events, livePaneKeys: cold.livePaneKeys, unavailableHostIDs: cold.unavailableHostIDs)
-        expect(!fleetStore.syncUnavailable && fleetStore.syncFailureDescription == nil,
+        // A genuinely cold store has no prior remote rows. Reusing fleetStore
+        // here would correctly retain its known failed-host rows as stale.
+        let coldStore = IslandStore()
+        coldStore.replaceFromPoll(cold.events, livePaneKeys: cold.livePaneKeys, unavailableHostIDs: cold.unavailableHostIDs)
+        expect(!coldStore.syncUnavailable && coldStore.syncFailureDescription == nil,
                "An unused offline remote environment never triggers a false disconnected warning")
-        expect((fleetStore.synchronizationDiagnostics["unavailableHosts"] as? [String]) == ["runtime:remote"],
+        expect((coldStore.synchronizationDiagnostics["unavailableHosts"] as? [String]) == ["runtime:remote"],
                "Diagnostics still expose offline host identifiers")
         fleetStore.replaceFromPoll([], livePaneKeys: [], unavailableHostIDs: ["local"])
         expect(fleetStore.syncUnavailable && fleetStore.syncFailure == "orca_snapshot_failed",

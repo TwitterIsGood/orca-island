@@ -4,7 +4,9 @@ import SwiftUI
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private let store = IslandStore()
+    private let store = IslandStore(
+        acknowledgementStorage: UserDefaultsIslandAcknowledgementStorage(defaults: .standard)
+    )
     private var panel: NotchPanel?
     private var server: LocalHTTPServer?
     private var poller: OrcaStatusPoller?
@@ -25,6 +27,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     diagnostics["headerClickCount"] = self?.panel?.headerClickCount ?? 0
                     diagnostics["pointerDownCount"] = self?.panel?.pointerDownCount ?? 0
                     diagnostics["ignoresMouseEvents"] = self?.panel?.ignoresMouseEvents ?? false
+                    diagnostics["inventorySource"] = "public-cli"
+                    diagnostics["acknowledgementScope"] = "island"
                     let data = try? JSONSerialization.data(withJSONObject: diagnostics)
                     complete(data ?? Data("{}".utf8))
                 }
@@ -131,7 +135,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             poller?.confirmBridge()
             if reconnecting { poller?.requestRefresh(immediate: true) }
         case .status(let event):
-            let needsMetadata = !store.sessions.values.contains { $0.paneKey == event.paneKey && $0.terminalTitle != nil }
+            let needsMetadata = !store.sessions.values.contains {
+                $0.paneKey == event.paneKey && $0.hostId == event.hostId
+                    && (event.workspaceId == nil || $0.workspaceId == event.workspaceId)
+                    && $0.terminalTitle != nil
+            }
             let accepted = store.ingest(event)
             store.recordBridgeMessage(isStatus: true)
             poller?.confirmBridge()

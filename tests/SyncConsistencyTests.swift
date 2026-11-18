@@ -2,10 +2,7 @@ import Foundation
 
 // This harness never navigates or sends input to a real Orca terminal.
 enum OrcaCommandRunner {
-    static func runHelper(_ arguments: [String]) -> Data? {
-        preconditionFailure("Helpers are unavailable in sync tests")
-    }
-    static func run(_ arguments: [String]) -> Data? {
+    static func run(_ arguments: [String], timeout: TimeInterval = 3) -> Data? {
         preconditionFailure("CLI commands are unavailable in sync tests")
     }
 }
